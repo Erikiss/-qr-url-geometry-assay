@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+import sqlite3
 import urllib.parse
 from collections import defaultdict
 from dataclasses import dataclass
@@ -65,6 +66,17 @@ def _host_hash(payload: str) -> str:
     return hashlib.sha256(host.lower().encode("utf-8")).hexdigest()
 
 
+def _open_seen_db(path: Path) -> sqlite3.Connection:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.unlink(missing_ok=True)
+    db = sqlite3.connect(path)
+    db.execute("PRAGMA journal_mode=OFF")
+    db.execute("PRAGMA synchronous=OFF")
+    db.execute("PRAGMA temp_store=MEMORY")
+    db.execute("CREATE TABLE seen (digest BLOB PRIMARY KEY) WITHOUT ROWID")
+    return db
+
+
 def _collect(config: dict[str, Any], kind: str) -> tuple[dict[int, Reservoir], dict[str, Any]]:
     source_config = config["sources"][kind]
     paths = source_config.get("paths", [])
@@ -81,54 +93,73 @@ def _collect(config: dict[str, Any], kind: str) -> tuple[dict[int, Reservoir], d
     total = 0
     accepted = 0
 
-    # Origin-level canonicalization already collapses all paths for one host, so
-    # raw URL deduplication would only waste memory. URL-level crawl unions use a
-    # disk-backed digest table by default to avoid multi-million-entry Python sets.
-    requested_dedup = bool(source_config.get("deduplicate", True))
-    raw_deduplicate = requested_dedup and granularity == "url"
+    # Deduplicate the *effective QR payload* after granularity and scheme policy,
+    # not the raw crawl URL. This avoids two giant seen-sets and correctly
+    # collapses http/https or multiple paths when the protocol asks for it.
+    must_dedup = granularity == "origin" or bool(source_config.get("deduplicate", True))
     dedup_backend = str(
-        source_config.get("dedup_backend", "sqlite" if raw_deduplicate else "memory")
+        source_config.get("dedup_backend", "memory" if granularity == "origin" else "sqlite")
     )
-    dedup_db_path = (
-        Path(config["outputs"]["directory"]) / ".dedup" / f"{kind}.sqlite"
-        if raw_deduplicate and dedup_backend == "sqlite"
-        else None
-    )
+    if dedup_backend not in {"memory", "sqlite"}:
+        raise ValueError(f"sources.{kind}.dedup_backend must be memory or sqlite")
+    seen_memory: set[bytes] | None = set() if must_dedup and dedup_backend == "memory" else None
+    seen_db: sqlite3.Connection | None = None
+    pending = 0
+    if must_dedup and dedup_backend == "sqlite":
+        output_dir = Path(config.get("outputs", {}).get("directory", ".qr-assay-tmp"))
+        seen_db = _open_seen_db(output_dir / ".dedup" / f"{kind}-canonical.sqlite")
 
-    canonical_seen: set[bytes] = set()
-    for source, raw_payload in iter_urls(
-        kind,
-        paths,
-        scan_limit=source_config.get("scan_limit"),
-        deduplicate=raw_deduplicate,
-        dedup_backend=dedup_backend,
-        dedup_db_path=dedup_db_path,
-    ):
-        total += 1
-        payload = _canonicalize_payload(
-            raw_payload, granularity=granularity, scheme_policy=scheme_policy
-        )
-        if not payload:
-            continue
-        digest = stable_digest128(payload)
-        if digest in canonical_seen:
-            continue
-        canonical_seen.add(digest)
-        length = len(payload.encode("utf-8"))
-        if length < min_bytes or length > max_bytes:
-            continue
-        accepted += 1
-        if length not in buckets:
-            buckets[length] = Reservoir(capacity, random.Random(seed ^ (length * 0x9E3779B1)))
-        buckets[length].add((source, payload))
+    try:
+        for source, raw_payload in iter_urls(
+            kind,
+            paths,
+            scan_limit=source_config.get("scan_limit"),
+            deduplicate=False,
+        ):
+            total += 1
+            payload = _canonicalize_payload(
+                raw_payload, granularity=granularity, scheme_policy=scheme_policy
+            )
+            if not payload:
+                continue
+            if must_dedup:
+                digest = stable_digest128(payload)
+                if seen_memory is not None:
+                    if digest in seen_memory:
+                        continue
+                    seen_memory.add(digest)
+                elif seen_db is not None:
+                    cursor = seen_db.execute(
+                        "INSERT OR IGNORE INTO seen(digest) VALUES (?)", (digest,)
+                    )
+                    if cursor.rowcount == 0:
+                        continue
+                    pending += 1
+                    if pending >= 10000:
+                        seen_db.commit()
+                        pending = 0
+            length = len(payload.encode("utf-8"))
+            if length < min_bytes or length > max_bytes:
+                continue
+            accepted += 1
+            if length not in buckets:
+                buckets[length] = Reservoir(
+                    capacity, random.Random(seed ^ (length * 0x9E3779B1))
+                )
+            buckets[length].add((source, payload))
+    finally:
+        if seen_db is not None:
+            seen_db.commit()
+            seen_db.close()
+
     return buckets, {
         "read": total,
         "accepted": accepted,
         "length_buckets": len(buckets),
         "granularity": granularity,
         "scheme_policy": scheme_policy,
-        "raw_deduplicate": raw_deduplicate,
-        "dedup_backend": dedup_backend if raw_deduplicate else "canonical-128bit-memory",
+        "deduplicated_effective_payloads": must_dedup,
+        "dedup_backend": dedup_backend if must_dedup else "none",
         "files": inventory,
     }
 
