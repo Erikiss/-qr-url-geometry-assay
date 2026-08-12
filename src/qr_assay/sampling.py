@@ -22,6 +22,7 @@ class SourcePayload:
     payload: str
     natural_host_sha256: str
     onion_version: int | None
+    natural_source_sha256: str = ""
 
 
 @dataclass
@@ -73,13 +74,14 @@ def _onion_version(payload: str) -> int | None:
 def _canonicalize_payload(payload: str, *, granularity: str, scheme_policy: str) -> str | None:
     """Create the actual QR payload after source parsing.
 
-    `origin` keeps only the host, `url` keeps host + path/query, and
-    `path_query` removes the host entirely so surface/onion suffix structure can
-    be compared without the trivial human-domain-vs-cryptographic-host contrast.
+    `origin` means host only: ports, path and query are removed. `url` keeps
+    host/port + path/query. `path_query` removes host and scheme entirely so the
+    suffix grammar can be compared without a DNS-vs-onion-host contrast.
     """
     parsed = _parse_url(payload)
     if parsed is None:
         return None
+    host = (parsed.hostname or "").lower()
     netloc = parsed.netloc.lower()
     path = parsed.path or "/"
     query = parsed.query
@@ -87,6 +89,7 @@ def _canonicalize_payload(payload: str, *, granularity: str, scheme_policy: str)
     if granularity == "path_query":
         return path + (f"?{query}" if query else "")
     if granularity == "origin":
+        netloc = host
         path = "/"
         query = ""
     if scheme_policy == "strip":
@@ -115,6 +118,20 @@ def _dedup_key(payload: str, host_sha256: str, granularity: str) -> str:
     return payload
 
 
+def _source_content_ids(inventory: list[dict[str, Any]]) -> tuple[dict[str, str], str]:
+    result: dict[str, str] = {}
+    used_fallback = False
+    for record in inventory:
+        path = str(Path(str(record["path"])).resolve())
+        digest = record.get("sha256")
+        if not digest:
+            used_fallback = True
+            digest = hashlib.sha256(path.encode("utf-8")).hexdigest()
+        result[path] = str(digest)
+    basis = "file_sha256_or_path_fallback" if used_fallback else "file_sha256"
+    return result, basis
+
+
 def _collect(
     config: dict[str, Any],
     kind: str,
@@ -127,6 +144,7 @@ def _collect(
         raise ValueError(f"No {kind} source paths configured")
     seed = int(config["seed"]) + (0 if kind == "surface" else 1)
     inventory = source_inventory(paths, hash_inputs=bool(source_config.get("hash_inputs", True)))
+    source_content_ids, source_cluster_id_basis = _source_content_ids(inventory)
     capacity = int(config["sampling"]["reservoir_per_length"])
     min_bytes = int(config["sampling"]["min_bytes"])
     max_bytes = int(config["sampling"]["max_bytes"])
@@ -208,6 +226,14 @@ def _collect(
                         seen_db.commit()
                         pending = 0
 
+            source_key = str(Path(source).resolve())
+            source_sha256 = source_content_ids.get(source_key)
+            if source_sha256 is None:
+                # This should not happen for an inventoried file, but retain an
+                # explicit deterministic fallback rather than emitting a null key.
+                source_sha256 = hashlib.sha256(source_key.encode("utf-8")).hexdigest()
+                source_cluster_id_basis = "file_sha256_or_path_fallback"
+
             accepted += 1
             if length not in buckets:
                 buckets[length] = Reservoir(capacity, random.Random(seed ^ (length * 0x9E3779B1)))
@@ -217,6 +243,7 @@ def _collect(
                     payload=payload,
                     natural_host_sha256=host_sha256,
                     onion_version=version,
+                    natural_source_sha256=source_sha256,
                 )
             )
     finally:
@@ -236,6 +263,7 @@ def _collect(
         "deduplicated_effective_payloads": must_dedup,
         "dedup_unit": "natural_host+payload" if granularity == "path_query" else "payload",
         "dedup_backend": dedup_backend if must_dedup else "none",
+        "source_cluster_id_basis": source_cluster_id_basis,
         "files": inventory,
     }
     if kind == "onion":
@@ -450,9 +478,6 @@ def prepare_payloads(config: dict[str, Any]) -> dict[str, Any]:
                 ),
             ]
             for payload_class, grammar, synthetic, source, natural_item, payload in rows:
-                natural_source_sha256 = hashlib.sha256(
-                    natural_item.source.encode("utf-8")
-                ).hexdigest()
                 record = {
                     "match_id": match_id,
                     "payload_class": payload_class,
@@ -462,9 +487,9 @@ def prepare_payloads(config: dict[str, Any]) -> dict[str, Any]:
                     "source": source,
                     "source_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
                     # Cluster IDs always point to the observed parent, including
-                    # synthetic controls. They remain available in path_query mode
-                    # even though the QR payload itself contains no hostname.
-                    "natural_source_sha256": natural_source_sha256,
+                    # synthetic controls. natural_source_sha256 is the content
+                    # digest of the source file when hashing is enabled.
+                    "natural_source_sha256": natural_item.natural_source_sha256,
                     "natural_host_sha256": natural_item.natural_host_sha256,
                     # Backward-compatible alias; semantically this is now the
                     # natural-parent host cluster, not necessarily a payload host.
