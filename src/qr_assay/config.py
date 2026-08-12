@@ -146,9 +146,7 @@ def validate(config: dict[str, Any]) -> None:
     for corpus in ("surface", "onion"):
         granularity = config["sources"][corpus].get("granularity", "url")
         if granularity not in valid_granularities:
-            raise ConfigError(
-                f"sources.{corpus}.granularity must be url, origin, or path_query"
-            )
+            raise ConfigError(f"sources.{corpus}.granularity must be url, origin, or path_query")
 
     onion_versions = [int(value) for value in config["sources"]["onion"].get("versions", [3])]
     if not onion_versions or not set(onion_versions) <= {2, 3}:
