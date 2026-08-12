@@ -6,12 +6,16 @@ sources:
     scan_limit: null
     deduplicate: false
     granularity: origin
+    # origin is deduplicated by protocol even when the upstream source claims
+    # uniqueness. At DomainsProject scale the exact seen-set must be disk-backed.
+    dedup_backend: sqlite
   onion:
     paths: [data/raw/onion]
     scan_limit: null
     deduplicate: true
     granularity: origin
     versions: [3]
+    dedup_backend: sqlite
 
 sampling:
   target_pairs: 1500000
