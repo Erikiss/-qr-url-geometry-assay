@@ -1,91 +1,141 @@
 # Experimental protocol
 
-## Question
+## Scope and estimand
 
-Does QR module geometry retain a detectable signature of natural URL structure,
-and is that signature different for ordinary surface URLs, natural onion URLs,
-and grammar-matched random controls after obvious size/mask confounds are held
-constant?
+This repository is **stage 1: stimulus geometry calibration**. It asks whether the QR matrices produced from natural URL strings retain detectable lexical/sequence structure after the obvious QR encoding confounds are controlled.
 
-This first-stage repository is deliberately CPU-only. It does not train a
-neural network and makes no claim about internal attention carriers. Its job is
-to establish the QR stimulus family and the geometric nulls cleanly before a
-later model/checkpoint carrier assay is attached.
+It does **not** measure payload semantics, neural representations, attention-head carriers, or carrier rotation. The QR encoder only sees bytes. Claims about semantics or internal model dynamics belong to a later model/checkpoint assay.
+
+The primary confirmatory estimand is conditional:
+
+> among surface and onion payloads matched on byte length, QR version, ECC and then averaged across all eight QR masks, how much geometric structure remains in natural strings relative to a declared structural null?
+
+The full run uses `origin` granularity for **both** surface and onion sources and strips schemes before matching. The URL/path experiment is separate and uses `url` granularity for both corpora.
 
 ## Unit of analysis
 
 One `match_id` contains four payloads with identical UTF-8 byte length:
 
-| class | observed/generated | grammar |
+| class | observed/generated | role |
 |---|---|---|
-| `surface_natural` | observed | surface URL |
-| `onion_natural` | observed | onion URL |
-| `surface_synthetic` | generated from its natural partner | surface URL |
-| `onion_synthetic` | generated from its natural partner | onion URL |
+| `surface_natural` | observed | surface natural |
+| `onion_natural` | observed | onion natural |
+| `surface_synthetic` | generated from its natural partner | declared surface null |
+| `onion_synthetic` | generated from its natural partner | declared onion null |
 
-The synthetic generator retains schemes, delimiter positions, case classes,
-digit positions, URL punctuation, `.onion`, and total byte length. Tokens are
-replaced using a deterministic seed. Synthetic v3 onion labels retain the
-specified version byte and checksum relation, so “synthetic” does not merely
-mean a malformed 56-character hostname. Synthetic addresses are never
-resolved.
+All configured QR masks are generated for **every payload**. Mask is therefore a within-payload nuisance factor, not a between-payload assignment. Paired inference first averages the primary geometry over masks and then computes one contrast per `match_id`; masks must never be counted as independent replicates.
 
-## Primary factorial design
+## Structural-null ladder
 
-For each payload:
+`samping.synthetic_mode` selects one null per run. Publication claims should be repeated across the ladder rather than relying on one synthetic family:
+
+1. `token_shuffle` — preserves token-level character multisets where meaningful;
+2. `class_permute` — preserves global ASCII unigram counts within lower/upper/digit classes while destroying positions;
+3. `grammar_random` — preserves delimiters and character-class positions but resamples token characters.
+
+For a v3 onion hostname, all three modes replace the cryptographic host label with another checksum-valid v3 address. That host is not a natural-language token, so the linguistic null ladder intentionally collapses at origin level. Path/query material still follows the selected null mode.
+
+A natural-vs-synthetic difference may therefore be called a **lexical/sequence-structure effect relative to the declared null**. It must not be called semantic without a model-based semantic assay.
+
+## Payload canonicalization
+
+Granularity and scheme treatment are explicit factors:
+
+- `sources.surface.granularity`: `origin` or `url`;
+- `sources.onion.granularity`: `origin` or `url`;
+- `sampling.scheme_policy`: `strip`, `https`, or `preserve`.
+
+The confirmatory full run uses `origin × origin` and `scheme_policy: strip`, removing the arbitrary `https://` versus `http://` prefix difference. The path/query experiment uses `url × url`; mixed granularity is exploratory only.
+
+## QR encoding controls
+
+Every matched unit is controlled on:
+
+- UTF-8 byte length;
+- forced byte-mode encoding (`optimize=0`);
+- error-correction level (`M` by default);
+- QR version;
+- all configured masks, factorialized within payload.
+
+The density-balanced analysis additionally intersects classes on `(byte length, QR version, ECC, mean-density bin)`, where mean density is averaged across masks for the payload.
+
+## Geometric calibration factors
+
+The core design uses:
 
 - rotation: `0°, 90°, 180°, 270°`;
 - polarity: `normal, bit-inverted`.
 
-This creates eight transform rows per base QR. The extended, separately
-configured design adds five reflection states and two integer scales. Keeping
-it separate prevents the confirmatory core from becoming a 48-row expansion.
+These transformed rows are **equivariance/QC calibration**, not evidence of spontaneous cyclic dynamics. A deterministic `np.rot90` orbit is cyclic by construction.
 
-## Locked controls
+The extended design uses the exact eight elements of the square symmetry group `D4` rather than a redundant rotation × reflection cross-product:
 
-Within each match:
+`r0, r90, r180, r270, mh, mv, md, ma`.
 
-- UTF-8 byte length;
-- QR version;
-- error correction (`M` by default);
-- byte-mode encoding (`optimize=0`);
-- mask pattern, assigned evenly over masks 0–7.
+Scale is configured separately. Bit inversion is the exact involution `Q' = 1 - Q`; it is not geometric circle inversion.
 
-For the reported balanced analysis, retain equal counts from the intersection
-of `(byte length, QR version, ECC, mask, black-density bin)` strata across all
-four classes. Report both the unfiltered and balanced estimates.
+## Observable families
 
-## Three observable families
+### Radial / stretching-like
 
-### 1. Radial
+- `radial_mean`;
+- `radial_std`;
+- covariance trace.
 
-Measure mean and standard deviation of black-module radius around the symbol
-center plus the second-moment covariance. A rotation should preserve normalized
-radial quantities; a systematic corpus effect after balancing is the signal.
+### Translation-like
 
-### 2. Translation
+- normalized black-module centroid `(centroid_x, centroid_y)`;
+- centroid radius.
 
-Measure the normalized centroid of black modules. Under a known 90° rotation,
-the centroid vector should rotate around the symbol center. A corpus effect is
-tested on centroid radius and paired x/y orbits.
+### Axial orientation
 
-### 3. Rotation/cyclicity
+- anisotropy;
+- `orientation_cos2`;
+- `orientation_sin2`.
 
-Measure principal-axis angle, anisotropy, transition rates, and explicit
-0°→90°→180°→270° orbits. Angle is meaningful only alongside anisotropy; nearly
-isotropic matrices must not be treated as having a stable orientation.
+`principal_angle_deg` is descriptive only. Principal-axis orientation is axial modulo 180°, so linear angle subtraction is invalid around the wrap boundary. Inferential comparisons use the doubled-angle embedding.
+
+### Texture / symmetry controls
+
+- horizontal and vertical transition rates;
+- 180° rotational similarity;
+- horizontal and vertical reflection similarity.
+
+## Inference
+
+The primary paired inference unit is **one `match_id` after averaging the primary geometry over all configured QR masks**. Masks and deterministic rotations are repeated measures, not independent observations.
+
+The repository still reports normal-approximation intervals and Holm-adjusted p-values as secondary diagnostics. For publication:
+
+- effect sizes and intervals are primary;
+- URL-granularity runs require host/crawl-clustered resampling because repeated paths from one host are not independent;
+- the origin-level run is the cleaner confirmatory analysis;
+- a large `n` must not turn a numerically tiny effect into a mechanistic claim.
 
 ## Falsification and QC
 
-The run is invalid if any of these occur:
+A run is invalid if any of these occur:
 
-1. any match has unequal byte length, QR version, ECC, or mask;
-2. normal transforms change density;
-3. inverted density is not exactly `1 - base_density` at module resolution;
-4. a source file or effective configuration is missing from the manifest;
-5. corpus comparison is reported without the unbalanced and balanced counts.
+1. a `match_id` lacks any of the four payload classes;
+2. a payload lacks any configured mask;
+3. byte length, QR version, or ECC differ inside a match;
+4. normal rotations/reflections/scales change module density;
+5. inverted density is not exactly `1 - base_density` at module resolution;
+6. a source file or effective configuration is missing from the manifest;
+7. corpus comparison is reported without unbalanced and density-balanced counts.
 
-The experiment does not interpret a classifier's accuracy as semantics. It
-first reports exact geometric statistics and controls. A future predictive
-model must split by source/crawl and by registrable/onion host to prevent URL
-leakage.
+## Required falsification battery before the million-scale run
+
+Before treating a full-corpus result as scientific evidence, run small synthetic worlds with known ground truth:
+
+- exact-null world: two corpora generated by the same process, expected effect 0;
+- unigram-only world: matched grammar with deliberately shifted character frequencies;
+- ordering world: equal character counts with different local sequence order;
+- orientation-QC world: known asymmetric matrices transformed by exact `D4` elements;
+- mask-stability world: the same payload under all eight masks.
+
+The assay should identify the planted distinction and stay null when none was planted.
+
+## Boundary to stage 2
+
+A later neural assay should consume these locked stimuli and record, per model/checkpoint, a continuous carrier vector such as head/expert causal contribution. Only then can one test whether stimulus rotation, reflection, inversion, or training-time relocation induces translation, stretching, rotation, hysteresis, or cyclicity in the model's internal carrier space.
