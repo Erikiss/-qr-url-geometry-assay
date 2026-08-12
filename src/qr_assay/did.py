@@ -193,7 +193,9 @@ def analyze_difference_in_differences(config: dict[str, Any]) -> dict[str, Any]:
             values = []
             for metric in CORE_METRICS:
                 natural_mean = sum(float(row[metric]) for row in natural_rows) / len(natural_rows)
-                synthetic_mean = sum(float(row[metric]) for row in synthetic_rows) / len(synthetic_rows)
+                synthetic_mean = sum(float(row[metric]) for row in synthetic_rows) / len(
+                    synthetic_rows
+                )
                 values.append(natural_mean - synthetic_mean)
             effects[corpus] = np.asarray(values, dtype=np.float64)
             cluster_keys[corpus] = (str(next(iter(hosts))), str(next(iter(sources))))
