@@ -20,8 +20,8 @@ def _vector(matrix: np.ndarray, region: np.ndarray) -> np.ndarray:
     return np.asarray([float(features[key]) for key in REGION_FEATURE_KEYS], dtype=np.float64)
 
 
-def _rng_seed(base_seed: int, match_id: int, payload_class: str, region: str, mask: int) -> int:
-    material = f"{base_seed}:{match_id}:{payload_class}:{region}:{mask}".encode("utf-8")
+def _rng_seed(base_seed: int, match_id: int, pair_group: str, region: str, mask: int) -> int:
+    material = f"{base_seed}:{match_id}:{pair_group}:{region}:{mask}".encode("utf-8")
     return int.from_bytes(hashlib.sha256(material).digest()[:8], "big")
 
 
@@ -122,15 +122,19 @@ def analyze_spatial_null(config: dict[str, Any]) -> dict[str, Any]:
             data_region, ecc_region, _ = codeword_region_masks(version, ecc)
             region_masks = {"data_codeword": data_region, "rs_ecc": ecc_region}
             residuals[payload_class] = {}
+            pair_group = "surface" if payload_class.startswith("surface_") else "onion"
             for region_name, region_mask in region_masks.items():
                 residual, null_sd = spatial_residual(
                     unmasked,
                     region_mask,
                     permutations=permutations,
+                    # Natural and synthetic members of one corpus/match use the
+                    # same permutation stream. This common-random-number design
+                    # removes avoidable Monte-Carlo noise from the paired effect.
                     seed=_rng_seed(
                         base_seed,
                         int(current_match_id),
-                        payload_class,
+                        pair_group,
                         region_name,
                         diagnostic_mask,
                     ),
@@ -203,6 +207,7 @@ def analyze_spatial_null(config: dict[str, Any]) -> dict[str, Any]:
         "diagnostic_mask": diagnostic_mask,
         "mask_removed_before_geometry": True,
         "permutations_per_payload_region": permutations,
+        "common_random_numbers_within_natural_synthetic_pair": True,
         "complete_matches": complete_matches,
         "invalid_matches": invalid_matches,
         "qrs_encoded": qrs_encoded,
