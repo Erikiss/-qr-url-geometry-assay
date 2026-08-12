@@ -49,3 +49,11 @@ def test_synthetic_is_deterministic_within_mode():
     first = grammar_matched(payload, seed=7, match_id=9, corpus="surface", mode="token_shuffle")
     second = grammar_matched(payload, seed=7, match_id=9, corpus="surface", mode="token_shuffle")
     assert first == second
+
+
+def test_degenerate_token_shuffle_stays_inside_the_declared_null_family():
+    payload = "/aaaa/1111"
+    result = grammar_matched(payload, seed=11, match_id=12, corpus="surface", mode="token_shuffle")
+    # There is no distinct within-token permutation here. The correct null draw
+    # is therefore identical, not a silent fallback to grammar_random.
+    assert result == payload
