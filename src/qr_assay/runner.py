@@ -12,6 +12,7 @@ from typing import Any
 
 from . import __version__
 from .analysis import analyze_features, write_report
+from .bitstream import analyze_bitstream_baseline
 from .cluster import analyze_clustered_core
 from .codeword import analyze_codeword_regions
 from .config import config_sha256
@@ -54,6 +55,11 @@ def run_all(config: dict[str, Any]) -> dict[str, Any]:
     codeword = (
         analyze_codeword_regions(config)
         if bool(config.get("analysis", {}).get("codeword_diagnostics", False))
+        else None
+    )
+    bitstream = (
+        analyze_bitstream_baseline(config)
+        if bool(config.get("analysis", {}).get("bitstream_diagnostics", False))
         else None
     )
     report_path = write_report(config, preparation, generation, analysis)
@@ -101,6 +107,16 @@ def run_all(config: dict[str, Any]) -> dict[str, Any]:
                 "qrs_encoded": codeword["qrs_encoded"],
             }
             if codeword is not None
+            else None
+        ),
+        "bitstream_analysis": (
+            {
+                "output": bitstream["output"],
+                "complete_matches": bitstream["complete_matches"],
+                "invalid_matches": bitstream["invalid_matches"],
+                "streams": bitstream["streams"],
+            }
+            if bitstream is not None
             else None
         ),
         "report": str(report_path),
