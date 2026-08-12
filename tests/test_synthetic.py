@@ -46,10 +46,6 @@ def test_onion_synthetic_preserves_suffix_byte_length_and_v3_checksum():
 
 def test_synthetic_is_deterministic_within_mode():
     payload = "https://example.org/alpha"
-    first = grammar_matched(
-        payload, seed=7, match_id=9, corpus="surface", mode="token_shuffle"
-    )
-    second = grammar_matched(
-        payload, seed=7, match_id=9, corpus="surface", mode="token_shuffle"
-    )
+    first = grammar_matched(payload, seed=7, match_id=9, corpus="surface", mode="token_shuffle")
+    second = grammar_matched(payload, seed=7, match_id=9, corpus="surface", mode="token_shuffle")
     assert first == second
