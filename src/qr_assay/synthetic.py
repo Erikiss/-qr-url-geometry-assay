@@ -27,11 +27,15 @@ def _synthetic_onion_label(length: int, rng: random.Random) -> str:
         checksum = hashlib.sha3_256(b".onion checksum" + public_key + version).digest()[:2]
         return base64.b32encode(public_key + checksum + version).decode("ascii").lower()
     if length == 16:
-        return base64.b32encode(bytes(rng.getrandbits(8) for _ in range(10))).decode("ascii").lower()
+        return (
+            base64.b32encode(bytes(rng.getrandbits(8) for _ in range(10))).decode("ascii").lower()
+        )
     raise ValueError(f"Unsupported onion label length: {length}")
 
 
-def _protected_ranges(payload: str, corpus: str) -> tuple[int, list[tuple[int, int]], re.Match[str] | None]:
+def _protected_ranges(
+    payload: str, corpus: str
+) -> tuple[int, list[tuple[int, int]], re.Match[str] | None]:
     scheme_end = payload.find("://") + 3 if "://" in payload else 0
     protected: list[tuple[int, int]] = []
     if scheme_end:
