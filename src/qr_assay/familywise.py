@@ -85,9 +85,7 @@ def _level_rows(clustered: dict[str, Any], level: str, alpha: float) -> list[dic
     for row in rows:
         p_holm = row["p_holm_familywise"]
         row["holm_reject_familywise_0_05"] = bool(
-            row["eligible_for_confirmatory_claim"]
-            and p_holm is not None
-            and float(p_holm) <= alpha
+            row["eligible_for_confirmatory_claim"] and p_holm is not None and float(p_holm) <= alpha
         )
         low = row["bonferroni_simultaneous_ci_low"]
         high = row["bonferroni_simultaneous_ci_high"]
