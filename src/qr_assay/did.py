@@ -15,6 +15,7 @@ from .fileio import open_text
 
 DID_FAMILY_SIZE = len(CORE_METRICS)
 DID_ALPHA = 0.05
+MIN_CONFIRMATORY_CLUSTERS = 20
 
 
 @dataclass
@@ -61,11 +62,7 @@ class SideAccumulator:
 
 
 class IndependentDifference:
-    """Difference of two independently clustered corpus means.
-
-    The artificial one-to-one Surface/Onion matching is never used as a covariance
-    assumption. Variances are estimated on each natural side and then added.
-    """
+    """Difference of two independently clustered corpus means."""
 
     def __init__(self) -> None:
         self.surface = SideAccumulator()
@@ -81,6 +78,16 @@ class IndependentDifference:
         mean = self.onion.mean() - self.surface.mean()
         var_surface = self.surface.variance()
         var_onion = self.onion.variance()
+        surface_effective = self.surface.effective_clusters()
+        onion_effective = self.onion.effective_clusters()
+        raw_ok = (
+            len(self.surface.clusters) >= MIN_CONFIRMATORY_CLUSTERS
+            and len(self.onion.clusters) >= MIN_CONFIRMATORY_CLUSTERS
+        )
+        effective_ok = (
+            surface_effective >= MIN_CONFIRMATORY_CLUSTERS
+            and onion_effective >= MIN_CONFIRMATORY_CLUSTERS
+        )
         rows: list[dict[str, Any]] = []
         for index, metric in enumerate(CORE_METRICS):
             finite = bool(np.isfinite(var_surface[index]) and np.isfinite(var_onion[index]))
@@ -96,8 +103,8 @@ class IndependentDifference:
                     "onion_cluster_level": onion_level,
                     "surface_cluster_count": len(self.surface.clusters),
                     "onion_cluster_count": len(self.onion.clusters),
-                    "surface_effective_cluster_count": self.surface.effective_clusters(),
-                    "onion_effective_cluster_count": self.onion.effective_clusters(),
+                    "surface_effective_cluster_count": surface_effective,
+                    "onion_effective_cluster_count": onion_effective,
                     "surface_max_cluster_size": self.surface.max_cluster(),
                     "onion_max_cluster_size": self.onion.max_cluster(),
                     "surface_cluster_variance": (
@@ -108,9 +115,8 @@ class IndependentDifference:
                     ),
                     "independent_cluster_standard_error": se,
                     "estimable": bool(se is not None and math.isfinite(se) and se > 0.0),
-                    "cluster_counts_ge_20": (
-                        len(self.surface.clusters) >= 20 and len(self.onion.clusters) >= 20
-                    ),
+                    "cluster_counts_ge_20": raw_ok,
+                    "effective_cluster_counts_ge_20": effective_ok,
                 }
             )
         return rows
@@ -127,7 +133,11 @@ def _apply_familywise(rows: list[dict[str, Any]], *, alpha: float = DID_ALPHA) -
     estimable = []
     for index, row in enumerate(rows):
         se = row["independent_cluster_standard_error"]
-        eligible = bool(row["estimable"] and row["cluster_counts_ge_20"])
+        eligible = bool(
+            row["estimable"]
+            and row["cluster_counts_ge_20"]
+            and row["effective_cluster_counts_ge_20"]
+        )
         row["eligible_for_confirmatory_claim"] = eligible
         if se is not None and float(se) > 0 and math.isfinite(float(se)):
             mean = float(row["mean_difference_in_differences"])
@@ -186,13 +196,7 @@ def _primary(row: dict[str, Any]) -> bool:
 
 
 def analyze_difference_in_differences(config: dict[str, Any]) -> dict[str, Any]:
-    """Compare Onion and Surface natural-minus-null effects without invented pairing covariance.
-
-    Exact byte-length pairing is a design/balance device only. The point estimate is
-    mean(Onion natural-null) - mean(Surface natural-null). Its variance is the sum
-    of the two one-way natural-host-clustered variances, so arbitrary re-pairing
-    within a matched length stratum cannot change either the estimate or its SE.
-    """
+    """Compare Onion and Surface natural-minus-null effects without invented pairing covariance."""
     output_dir = Path(config["outputs"]["directory"])
     features_path = output_dir / config["outputs"]["features_file"]
     if not features_path.exists():
@@ -309,6 +313,8 @@ def analyze_difference_in_differences(config: dict[str, Any]) -> dict[str, Any]:
         "core_metrics": list(CORE_METRICS),
         "family_size": DID_FAMILY_SIZE,
         "alpha": DID_ALPHA,
+        "minimum_raw_clusters_per_corpus": MIN_CONFIRMATORY_CLUSTERS,
+        "minimum_effective_clusters_per_corpus": MIN_CONFIRMATORY_CLUSTERS,
         "complete_matches": complete_matches,
         "invalid_matches": invalid_matches,
         "host_independent_cluster_difference": host_rows,
@@ -317,7 +323,8 @@ def analyze_difference_in_differences(config: dict[str, Any]) -> dict[str, Any]:
             "Match-level natural-minus-null effects after averaging QR masks. Exact cross-corpus "
             "byte-length/QR matching is used for balance only. DiD uncertainty is pairing-invariant: "
             "the one-way CR1 variance of the Onion mean and the one-way CR1 variance of the Surface "
-            "mean are added, separately for natural-host and source-file clustering."
+            "mean are added. Claim eligibility requires at least 20 observed and at least 20 "
+            "effective clusters on both corpus sides."
         ),
         "interpretation": (
             "This tests whether natural-vs-declared-null QR geometry differs between corpora on "
