@@ -1,0 +1,46 @@
+seed: 267010
+
+sources:
+  surface:
+    paths: [data/raw/surface]
+    scan_limit: 1000000
+    deduplicate: false
+    granularity: origin
+  onion:
+    paths: [data/raw/onion]
+    scan_limit: null
+    deduplicate: true
+    granularity: origin
+
+sampling:
+  # Deterministic transform identities do not need the million-scale corpus.
+  target_pairs: 10000
+  reservoir_per_length: 20000
+  min_bytes: 16
+  max_bytes: 1024
+  scheme_policy: strip
+  synthetic_mode: grammar_random
+
+qr:
+  error_correction: M
+  masks: [0, 1, 2, 3, 4, 5, 6, 7]
+  border: 0
+
+transforms:
+  group: factorial
+  rotations: [0, 90, 180, 270]
+  inversions: [false, true]
+  reflections: [none]
+  scales: [1]
+
+execution:
+  workers: 0
+  chunk_size: 128
+
+outputs:
+  directory: results/equivariance
+  store_payload_text: true
+  png_examples_per_class: 3
+
+analysis:
+  density_bin_width: 0.005
