@@ -21,7 +21,7 @@ def _vector(matrix: np.ndarray, region: np.ndarray) -> np.ndarray:
 
 
 def _rng_seed(base_seed: int, match_id: int, pair_group: str, region: str, mask: int) -> int:
-    material = f"{base_seed}:{match_id}:{pair_group}:{region}:{mask}".encode("utf-8")
+    material = f"{base_seed}:{match_id}:{pair_group}:{region}:{mask}".encode()
     return int.from_bytes(hashlib.sha256(material).digest()[:8], "big")
 
 
@@ -46,8 +46,6 @@ def spatial_residual(
     permuted = data.copy()
     for index in range(permutations):
         permuted[region_bool] = rng.permutation(bits)
-        # Density is exactly preserved by construction. The four reported
-        # residual metrics focus on spatial placement rather than bit count.
         null_values[index] = _vector(permuted, region_bool)
     null_mean = null_values.mean(axis=0)
     null_sd = null_values.std(axis=0, ddof=1) if permutations > 1 else np.zeros_like(null_mean)
@@ -128,9 +126,6 @@ def analyze_spatial_null(config: dict[str, Any]) -> dict[str, Any]:
                     unmasked,
                     region_mask,
                     permutations=permutations,
-                    # Natural and synthetic members of one corpus/match use the
-                    # same permutation stream. This common-random-number design
-                    # removes avoidable Monte-Carlo noise from the paired effect.
                     seed=_rng_seed(
                         base_seed,
                         int(current_match_id),
