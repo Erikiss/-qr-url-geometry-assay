@@ -48,6 +48,34 @@ def make_qr(
     return matrix, int(qr.version)
 
 
+def data_module_mask(version: int) -> np.ndarray:
+    """Return 1 exactly where QR data/ECC modules may be mapped.
+
+    The qrcode library builds function patterns before `map_data`. We replay that
+    pre-map construction with test type information, then mark the remaining
+    `None` cells. This avoids hand-maintaining finder/timing/alignment/version
+    coordinates and keeps the region definition tied to the encoder used here.
+    """
+    qr = qrcode.QRCode(
+        version=int(version),
+        error_correction=ERROR_CORRECT_M,
+        box_size=1,
+        border=0,
+        mask_pattern=0,
+    )
+    qr.modules_count = int(version) * 4 + 17
+    qr.modules = [[None] * qr.modules_count for _ in range(qr.modules_count)]
+    qr.setup_position_probe_pattern(0, 0)
+    qr.setup_position_probe_pattern(qr.modules_count - 7, 0)
+    qr.setup_position_probe_pattern(0, qr.modules_count - 7)
+    qr.setup_position_adjust_pattern()
+    qr.setup_timing_pattern()
+    qr.setup_type_info(True, 0)
+    if int(version) >= 7:
+        qr.setup_type_number(True)
+    return np.asarray([[cell is None for cell in row] for row in qr.modules], dtype=np.uint8)
+
+
 def transform_matrix(
     matrix: np.ndarray,
     *,
@@ -76,45 +104,63 @@ def transform_matrix(
     return np.ascontiguousarray(result, dtype=np.uint8)
 
 
-def _safe_mean(values: np.ndarray) -> float:
-    return float(values.mean()) if values.size else 0.0
+def _safe_ratio(numerator: float, denominator: float) -> float:
+    return float(numerator / denominator) if denominator else 0.0
 
 
-def geometry_features(matrix: np.ndarray) -> dict[str, float | int | str]:
+def geometry_features(
+    matrix: np.ndarray, region_mask: np.ndarray | None = None
+) -> dict[str, float | int | str]:
     data = np.asarray(matrix, dtype=np.uint8)
     height, width = data.shape
-    density = float(data.mean())
-    total = int(data.sum())
+    if region_mask is None:
+        region = np.ones(data.shape, dtype=bool)
+    else:
+        region = np.asarray(region_mask, dtype=bool)
+        if region.shape != data.shape:
+            raise ValueError("region_mask must have the same shape as matrix")
+    weights = data * region
+    region_modules = int(region.sum())
+    total = int(weights.sum())
+    density = _safe_ratio(total, region_modules)
     yy, xx = np.indices(data.shape, dtype=np.float64)
     center_x = (width - 1) / 2.0
     center_y = (height - 1) / 2.0
     norm = max(width - 1, height - 1, 1)
     if total:
-        centroid_x = float((xx * data).sum() / total)
-        centroid_y = float((yy * data).sum() / total)
+        centroid_x = float((xx * weights).sum() / total)
+        centroid_y = float((yy * weights).sum() / total)
         dx = (xx - centroid_x) / norm
         dy = (yy - centroid_y) / norm
-        cxx = float((data * dx * dx).sum() / total)
-        cyy = float((data * dy * dy).sum() / total)
-        cxy = float((data * dx * dy).sum() / total)
+        cxx = float((weights * dx * dx).sum() / total)
+        cyy = float((weights * dy * dy).sum() / total)
+        cxy = float((weights * dx * dy).sum() / total)
         covariance = np.array([[cxx, cxy], [cxy, cyy]], dtype=np.float64)
         eigenvalues = np.linalg.eigvalsh(covariance)
         radial = np.sqrt(((xx - center_x) / norm) ** 2 + ((yy - center_y) / norm) ** 2)
-        radial_mean = float((data * radial).sum() / total)
-        radial_std = float(np.sqrt((data * (radial - radial_mean) ** 2).sum() / total))
+        radial_mean = float((weights * radial).sum() / total)
+        radial_std = float(np.sqrt((weights * (radial - radial_mean) ** 2).sum() / total))
         angle = 0.5 * math.degrees(math.atan2(2.0 * cxy, cxx - cyy))
         anisotropy = float((eigenvalues[-1] - eigenvalues[0]) / (eigenvalues.sum() + 1e-12))
     else:
         centroid_x = center_x
         centroid_y = center_y
         cxx = cyy = cxy = radial_mean = radial_std = angle = anisotropy = 0.0
-        eigenvalues = np.array([0.0, 0.0])
-    transition_h = _safe_mean(data[:, 1:] != data[:, :-1])
-    transition_v = _safe_mean(data[1:, :] != data[:-1, :])
+
+    valid_h = region[:, 1:] & region[:, :-1]
+    valid_v = region[1:, :] & region[:-1, :]
+    transition_h = _safe_ratio(((data[:, 1:] != data[:, :-1]) & valid_h).sum(), valid_h.sum())
+    transition_v = _safe_ratio(((data[1:, :] != data[:-1, :]) & valid_v).sum(), valid_v.sum())
+
+    def symmetry_score(other_data: np.ndarray, other_region: np.ndarray) -> float:
+        valid = region & other_region
+        return _safe_ratio(((data == other_data) & valid).sum(), valid.sum())
+
     packed = np.packbits(data, axis=None).tobytes()
     return {
         "height": height,
         "width": width,
+        "region_modules": region_modules,
         "black_modules": total,
         "density": density,
         "centroid_x": (centroid_x - center_x) / norm,
@@ -128,15 +174,13 @@ def geometry_features(matrix: np.ndarray) -> dict[str, float | int | str]:
         "cov_trace": cxx + cyy,
         "principal_angle_deg": angle,
         "anisotropy": anisotropy,
-        # Axial orientation is modulo 180 degrees, so 2*theta is the correct
-        # circular representation for inference.
         "orientation_cos2": anisotropy * math.cos(math.radians(2.0 * angle)),
         "orientation_sin2": anisotropy * math.sin(math.radians(2.0 * angle)),
         "transition_h": transition_h,
         "transition_v": transition_v,
-        "symmetry_rot180": float((data == np.rot90(data, 2)).mean()),
-        "symmetry_horizontal": float((data == np.fliplr(data)).mean()),
-        "symmetry_vertical": float((data == np.flipud(data)).mean()),
+        "symmetry_rot180": symmetry_score(np.rot90(data, 2), np.rot90(region, 2)),
+        "symmetry_horizontal": symmetry_score(np.fliplr(data), np.fliplr(region)),
+        "symmetry_vertical": symmetry_score(np.flipud(data), np.flipud(region)),
         "matrix_sha256": hashlib.sha256(packed).hexdigest(),
     }
 
