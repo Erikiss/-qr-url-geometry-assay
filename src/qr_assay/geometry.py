@@ -6,6 +6,7 @@ from typing import Any
 
 import numpy as np
 import qrcode
+from qrcode import base, util
 from qrcode.constants import (
     ERROR_CORRECT_H,
     ERROR_CORRECT_L,
@@ -35,6 +36,11 @@ D4_OPS = (
 def make_qr(
     payload: str, *, error_correction: str = "M", mask: int = 0, border: int = 0
 ) -> tuple[np.ndarray, int]:
+    """Encode one payload in explicitly forced QR byte mode.
+
+    Forcing byte mode removes a hidden encoder-choice confound: the same lexical
+    comparison must not silently switch between numeric/alphanumeric/byte modes.
+    """
     qr = qrcode.QRCode(
         version=None,
         error_correction=ERROR_CORRECTION[error_correction.upper()],
@@ -42,19 +48,25 @@ def make_qr(
         border=int(border),
         mask_pattern=int(mask),
     )
-    qr.add_data(payload.encode("utf-8"), optimize=0)
+    qr.add_data(
+        util.QRData(
+            payload.encode("utf-8"),
+            mode=util.MODE_8BIT_BYTE,
+            check_data=False,
+        )
+    )
     qr.make(fit=True)
     matrix = np.asarray(qr.get_matrix(), dtype=np.uint8)
     return matrix, int(qr.version)
 
 
 def data_module_mask(version: int) -> np.ndarray:
-    """Return 1 exactly where QR data/ECC modules may be mapped.
+    """Return 1 exactly where QR data/ECC/remainder modules may be mapped.
 
     The qrcode library builds function patterns before `map_data`. We replay that
     pre-map construction with test type information, then mark the remaining
     `None` cells. This avoids hand-maintaining finder/timing/alignment/version
-    coordinates and keeps the region definition tied to the encoder used here.
+    coordinates and keeps the region definition tied to the pinned encoder.
     """
     qr = qrcode.QRCode(
         version=int(version),
@@ -74,6 +86,86 @@ def data_module_mask(version: int) -> np.ndarray:
     if int(version) >= 7:
         qr.setup_type_number(True)
     return np.asarray([[cell is None for cell in row] for row in qr.modules], dtype=np.uint8)
+
+
+def codeword_region_masks(
+    version: int, error_correction: str = "M"
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Split mapped QR modules into data-codeword, RS-ECC and remainder regions.
+
+    `python-qrcode==8.2` emits all interleaved data codewords first and all
+    Reed-Solomon error-correction codewords second. Its `map_data` routine then
+    consumes those bits in a deterministic zig-zag over the free modules. We
+    replay only that traversal, assigning each free module by bit index.
+
+    The *data-codeword* region is intentionally not called a pure payload region:
+    it includes mode/count framing, payload bytes, terminator/alignment padding,
+    and alternating QR pad codewords. The separation nevertheless removes the
+    downstream Reed-Solomon parity region as a distinct source of geometry.
+    """
+    ecc = ERROR_CORRECTION[error_correction.upper()]
+    rs_blocks = base.rs_blocks(int(version), ecc)
+    data_codeword_bits = sum(block.data_count for block in rs_blocks) * 8
+    total_codeword_bits = sum(block.total_count for block in rs_blocks) * 8
+
+    free = data_module_mask(int(version)).astype(bool)
+    data_region = np.zeros_like(free, dtype=np.uint8)
+    ecc_region = np.zeros_like(free, dtype=np.uint8)
+    remainder_region = np.zeros_like(free, dtype=np.uint8)
+
+    modules_count = free.shape[0]
+    inc = -1
+    row = modules_count - 1
+    bit_index = 0
+
+    for col in range(modules_count - 1, 0, -2):
+        if col <= 6:
+            col -= 1
+        col_range = (col, col - 1)
+        while True:
+            for current_col in col_range:
+                if free[row, current_col]:
+                    if bit_index < data_codeword_bits:
+                        data_region[row, current_col] = 1
+                    elif bit_index < total_codeword_bits:
+                        ecc_region[row, current_col] = 1
+                    else:
+                        remainder_region[row, current_col] = 1
+                    bit_index += 1
+            row += inc
+            if row < 0 or modules_count <= row:
+                row -= inc
+                inc = -inc
+                break
+
+    if bit_index != int(free.sum()):
+        raise AssertionError("QR codeword traversal did not consume all free modules")
+    if int(data_region.sum()) != data_codeword_bits:
+        raise AssertionError("QR data-codeword region has an unexpected size")
+    if int(ecc_region.sum()) != total_codeword_bits - data_codeword_bits:
+        raise AssertionError("QR ECC region has an unexpected size")
+    if not np.array_equal(
+        (data_region | ecc_region | remainder_region).astype(np.uint8), free.astype(np.uint8)
+    ):
+        raise AssertionError("QR codeword regions do not partition the free-module region")
+
+    return data_region, ecc_region, remainder_region
+
+
+def unmask_data_modules(matrix: np.ndarray, version: int, mask: int) -> np.ndarray:
+    """Undo only the QR mask on data/ECC/remainder modules.
+
+    Fixed finder/timing/format/version patterns are left untouched. This is a
+    diagnostic representation of the encoded bitstream geometry, not a rendered
+    QR code that should be fed to a scanner or model.
+    """
+    result = np.asarray(matrix, dtype=np.uint8).copy()
+    region = data_module_mask(int(version)).astype(bool)
+    mask_func = util.mask_func(int(mask))
+    for row, col in np.argwhere(region):
+        if mask_func(int(row), int(col)):
+            result[row, col] ^= 1
+    return np.ascontiguousarray(result, dtype=np.uint8)
 
 
 def transform_matrix(
