@@ -12,7 +12,13 @@ from PIL import Image
 
 from .config import effective_workers
 from .fileio import open_text
-from .geometry import geometry_features, make_qr, transform_grid, transform_matrix
+from .geometry import (
+    data_module_mask,
+    geometry_features,
+    make_qr,
+    transform_grid,
+    transform_matrix,
+)
 
 
 def _chunks(iterator: Iterator[dict[str, Any]], size: int) -> Iterator[list[dict[str, Any]]]:
@@ -30,6 +36,10 @@ def _read_jsonl(path: Path) -> Iterator[dict[str, Any]]:
                 yield json.loads(line)
 
 
+def _prefixed(prefix: str, values: dict[str, Any]) -> dict[str, Any]:
+    return {f"{prefix}{key}": value for key, value in values.items() if key != "matrix_sha256"}
+
+
 def _process_chunk(
     args: tuple[list[dict[str, Any]], dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -37,6 +47,8 @@ def _process_chunk(
     output: list[dict[str, Any]] = []
     ecc = str(config["qr"]["error_correction"]).upper()
     border = int(config["qr"].get("border", 0))
+    if border != 0:
+        raise ValueError("Scientific feature generation requires qr.border=0")
     masks = [int(mask) for mask in config["qr"]["masks"]]
     transforms = list(transform_grid(config))
     for record in records:
@@ -45,10 +57,18 @@ def _process_chunk(
             raise ValueError("Generation requires outputs.store_payload_text=true")
         for mask in masks:
             base, version = make_qr(payload, error_correction=ecc, mask=mask, border=border)
+            base_region = data_module_mask(version)
+            if base_region.shape != base.shape:
+                raise AssertionError("QR data-region mask shape mismatch")
             base_features = geometry_features(base)
+            base_data_features = geometry_features(base, base_region)
             for transform in transforms:
                 matrix = transform_matrix(base, **transform)
+                region_transform = dict(transform)
+                region_transform["inverted"] = False
+                region = transform_matrix(base_region, **region_transform)
                 features = geometry_features(matrix)
+                data_features = geometry_features(matrix, region)
                 row = {
                     "match_id": record["match_id"],
                     "payload_class": record["payload_class"],
@@ -63,8 +83,10 @@ def _process_chunk(
                     "error_correction": ecc,
                     "mask": mask,
                     "base_density": base_features["density"],
+                    "base_data_density": base_data_features["density"],
                     **transform,
                     **features,
+                    **_prefixed("data_", data_features),
                 }
                 output.append(row)
     return output
@@ -144,4 +166,5 @@ def generate_features(config: dict[str, Any]) -> dict[str, Any]:
         "elapsed_seconds": elapsed,
         "rows_per_second": rows / elapsed if elapsed else 0.0,
         "png_examples": examples,
+        "feature_regions": ["full_matrix", "data_ecc_modules_only"],
     }
