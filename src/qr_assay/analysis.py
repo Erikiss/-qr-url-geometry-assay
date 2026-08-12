@@ -253,8 +253,8 @@ def analyze_features(config: dict[str, Any]) -> dict[str, Any]:
         invariants = {"byte_length": set(), "qr_version": set(), "error_correction": set()}
         for cls in CLASSES:
             rows_for_class = list(match_records[cls].values())
-            for name in invariants:
-                invariants[name].update(row[name] for row in rows_for_class)
+            for name, invariant_values in invariants.items():
+                invariant_values.update(row[name] for row in rows_for_class)
             class_means[cls] = {
                 metric: sum(float(row[metric]) for row in rows_for_class) / len(rows_for_class)
                 for metric in INFERENCE_METRICS
