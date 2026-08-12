@@ -68,16 +68,17 @@ def test_path_query_removes_host_and_scheme_for_both_corpora():
     surface = f"https://example.org{suffix}"
     onion_host = synthetic_onion_label(56, random.Random(4)) + ".onion"
     onion = f"http://{onion_host}{suffix}"
-    assert _canonicalize_payload(surface, granularity="path_query", scheme_policy="preserve") == suffix
+    assert (
+        _canonicalize_payload(surface, granularity="path_query", scheme_policy="preserve")
+        == suffix
+    )
     assert _canonicalize_payload(onion, granularity="path_query", scheme_policy="https") == suffix
 
 
 def test_path_query_deduplicates_within_host_but_not_across_hosts(tmp_path):
     source = tmp_path / "surface.txt"
     source.write_text(
-        "https://a.example/login\n"
-        "https://a.example/login\n"
-        "https://b.example/login\n",
+        "https://a.example/login\nhttps://a.example/login\nhttps://b.example/login\n",
         encoding="utf-8",
     )
     config = {
