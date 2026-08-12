@@ -11,6 +11,7 @@ sources:
     scan_limit: null
     deduplicate: true
     granularity: origin
+    versions: [3]
 
 sampling:
   target_pairs: 1500000
@@ -19,6 +20,9 @@ sampling:
   max_bytes: 1024
   # Remove the arbitrary https-vs-http prefix before matching/encoding.
   scheme_policy: strip
+  # Preserve the shared empirical byte-length support rather than weighting rare
+  # lengths equally with common ones.
+  length_weighting: overlap
   # Weakest null in the ladder; repeat with token_shuffle/class_permute configs
   # before interpreting a natural-vs-synthetic effect structurally.
   synthetic_mode: grammar_random
@@ -32,7 +36,7 @@ qr:
 transforms:
   # The million-scale corpus run stores only the primary state. Rotations and
   # polarity flips are deterministic matrix operations and belong in the much
-  # smaller equivariance calibration, not in 384M redundant rows.
+  # smaller equivariance calibration, not in redundant corpus-scale rows.
   group: factorial
   rotations: [0]
   inversions: [false]
