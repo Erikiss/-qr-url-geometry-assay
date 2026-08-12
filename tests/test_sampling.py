@@ -89,17 +89,21 @@ def test_path_query_synthetic_rows_inherit_natural_host_and_source_clusters(tmp_
         rows = [json.loads(line) for line in handle]
 
     by_class = {row["payload_class"]: row for row in rows}
-    assert by_class["surface_natural"]["natural_host_sha256"] == by_class["surface_synthetic"][
-        "natural_host_sha256"
-    ]
-    assert by_class["onion_natural"]["natural_host_sha256"] == by_class["onion_synthetic"][
-        "natural_host_sha256"
-    ]
-    assert by_class["surface_natural"]["natural_source_sha256"] == by_class["surface_synthetic"][
-        "natural_source_sha256"
-    ]
-    assert by_class["onion_natural"]["natural_source_sha256"] == by_class["onion_synthetic"][
-        "natural_source_sha256"
-    ]
+    assert (
+        by_class["surface_natural"]["natural_host_sha256"]
+        == by_class["surface_synthetic"]["natural_host_sha256"]
+    )
+    assert (
+        by_class["onion_natural"]["natural_host_sha256"]
+        == by_class["onion_synthetic"]["natural_host_sha256"]
+    )
+    assert (
+        by_class["surface_natural"]["natural_source_sha256"]
+        == by_class["surface_synthetic"]["natural_source_sha256"]
+    )
+    assert (
+        by_class["onion_natural"]["natural_source_sha256"]
+        == by_class["onion_synthetic"]["natural_source_sha256"]
+    )
     assert ".onion" not in by_class["onion_natural"]["payload"]
     assert "example.org" not in by_class["surface_natural"]["payload"]
