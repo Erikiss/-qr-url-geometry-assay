@@ -19,7 +19,7 @@ NULL_MODES = {"token_shuffle", "class_permute", "grammar_random"}
 
 
 def _rng(seed: int, unit_key: str, corpus: str, mode: str) -> random.Random:
-    material = f"{seed}:{unit_key}:{corpus}:{mode}".encode("utf-8")
+    material = f"{seed}:{unit_key}:{corpus}:{mode}".encode()
     return random.Random(int.from_bytes(hashlib.sha256(material).digest()[:8], "big"))
 
 
