@@ -20,6 +20,7 @@ from .confirmatory_report import write_confirmatory_report
 from .generate import generate_features
 from .null_qc import analyze_null_qc
 from .sampling import prepare_payloads
+from .spatial_null import analyze_spatial_null
 
 
 def _git_commit() -> str | None:
@@ -63,6 +64,11 @@ def run_all(config: dict[str, Any]) -> dict[str, Any]:
         if bool(config.get("analysis", {}).get("bitstream_diagnostics", False))
         else None
     )
+    spatial_null = (
+        analyze_spatial_null(config)
+        if bool(config.get("analysis", {}).get("spatial_null_diagnostics", False))
+        else None
+    )
     descriptive_report_path = write_report(config, preparation, generation, analysis)
     confirmatory_report_path = write_confirmatory_report(
         config,
@@ -72,6 +78,7 @@ def run_all(config: dict[str, Any]) -> dict[str, Any]:
         descriptive_report=descriptive_report_path,
         codeword=codeword,
         bitstream=bitstream,
+        spatial_null=spatial_null,
     )
     output_dir = Path(config["outputs"]["directory"])
     manifest = {
@@ -127,6 +134,21 @@ def run_all(config: dict[str, Any]) -> dict[str, Any]:
                 "streams": bitstream["streams"],
             }
             if bitstream is not None
+            else None
+        ),
+        "spatial_null_analysis": (
+            {
+                "output": spatial_null["output"],
+                "complete_matches": spatial_null["complete_matches"],
+                "invalid_matches": spatial_null["invalid_matches"],
+                "permutations_per_payload_region": spatial_null[
+                    "permutations_per_payload_region"
+                ],
+                "common_random_numbers": spatial_null[
+                    "common_random_numbers_within_natural_synthetic_pair"
+                ],
+            }
+            if spatial_null is not None
             else None
         ),
         "report": str(confirmatory_report_path),
