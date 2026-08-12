@@ -118,7 +118,12 @@ def _write_examples(config: dict[str, Any], payload_path: Path, output_dir: Path
         if counts.get(cls, 0) >= limit:
             continue
         matrix, _ = make_qr(record["payload"], error_correction=ecc, mask=example_mask, border=0)
-        path = output_dir / "examples" / cls / f"match-{record['match_id']:06d}-mask-{example_mask}.png"
+        path = (
+            output_dir
+            / "examples"
+            / cls
+            / f"match-{record['match_id']:06d}-mask-{example_mask}.png"
+        )
         _save_png(matrix, path)
         counts[cls] = counts.get(cls, 0) + 1
         written += 1
