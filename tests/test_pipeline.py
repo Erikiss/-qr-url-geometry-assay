@@ -13,9 +13,10 @@ def test_end_to_end(tmp_path: Path):
     onions = [f"http://{base32_a}.onion/", f"http://{base32_b}.onion/x"]
     surfaces = []
     for index, onion in enumerate(onions):
+        onion_stripped = onion.split("://", 1)[1]
         path = "/" if index == 0 else "/x"
-        fixed = len(("https://" + ".invalid" + path).encode())
-        label = "s" * (len(onion.encode()) - fixed)
+        fixed = len(("s.invalid" + path).encode())
+        label = "s" * (len(onion_stripped.encode()) - fixed + 1)
         surfaces.append(f"https://{label}.invalid{path}")
     raw = tmp_path / "raw"
     raw.mkdir()
@@ -29,10 +30,20 @@ def test_end_to_end(tmp_path: Path):
                     "surface": {
                         "paths": [str(raw / "surface.txt")],
                         "deduplicate": True,
+                        "granularity": "url",
                     },
-                    "onion": {"paths": [str(raw / "onion.txt")], "deduplicate": True},
+                    "onion": {
+                        "paths": [str(raw / "onion.txt")],
+                        "deduplicate": True,
+                        "granularity": "url",
+                    },
                 },
-                "sampling": {"target_pairs": 2, "reservoir_per_length": 10},
+                "sampling": {
+                    "target_pairs": 2,
+                    "reservoir_per_length": 10,
+                    "scheme_policy": "strip",
+                },
+                "qr": {"masks": [0, 1, 2]},
                 "transforms": {
                     "rotations": [0, 90],
                     "inversions": [False, True],
@@ -51,13 +62,16 @@ def test_end_to_end(tmp_path: Path):
     )
     manifest = run_all(load_config(config_path))
     assert manifest["preparation"]["matched_pairs"] == 2
-    assert manifest["generation"]["rows"] == 2 * 4 * 2 * 2
+    # 2 matches x 4 payload classes x 3 masks x 2 rotations x 2 polarities
+    assert manifest["generation"]["rows"] == 2 * 4 * 3 * 2 * 2
+    assert manifest["generation"]["masks_per_payload"] == 3
     assert manifest["analysis_summary"]["quality_control"]["passed"]
     assert (tmp_path / "results" / "report.md").exists()
     with (tmp_path / "results" / "analysis.json").open(encoding="utf-8") as handle:
         analysis = json.load(handle)
     assert len(analysis["paired_effects"]) > 0
     assert all("p_holm" in effect for effect in analysis["paired_effects"])
+    assert all(effect["n_matches"] == 2 for effect in analysis["paired_effects"])
     with (tmp_path / "results" / "run_manifest.json").open(encoding="utf-8") as handle:
         persisted = json.load(handle)
     assert persisted["config_sha256"] == manifest["config_sha256"]
