@@ -30,15 +30,18 @@ qr:
   border: 0
 
 transforms:
+  # The million-scale corpus run stores only the primary state. Rotations and
+  # polarity flips are deterministic matrix operations and belong in the much
+  # smaller equivariance calibration, not in 384M redundant rows.
   group: factorial
-  rotations: [0, 90, 180, 270]
-  inversions: [false, true]
+  rotations: [0]
+  inversions: [false]
   reflections: [none]
   scales: [1]
 
 execution:
   workers: 0
-  chunk_size: 128
+  chunk_size: 256
 
 outputs:
   directory: results/full
