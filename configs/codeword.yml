@@ -25,8 +25,8 @@ sampling:
 qr:
   error_correction: M
   # The ordinary stage-1 features still average all masks. The additional
-  # codeword diagnostic separately generates one configured mask and removes it
-  # deterministically before region geometry is measured.
+  # codeword/bitstream diagnostics separately generate one configured mask and
+  # remove it deterministically before region or sequence geometry is measured.
   masks: [0, 1, 2, 3, 4, 5, 6, 7]
   border: 0
 
@@ -50,3 +50,5 @@ analysis:
   density_bin_width: 0.005
   codeword_diagnostics: true
   codeword_mask: 0
+  bitstream_diagnostics: true
+  bitstream_mask: 0
