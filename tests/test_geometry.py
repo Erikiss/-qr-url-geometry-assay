@@ -1,6 +1,6 @@
 import numpy as np
 
-from qr_assay.geometry import geometry_features, make_qr, transform_matrix
+from qr_assay.geometry import geometry_features, make_qr, transform_grid, transform_matrix
 
 
 def test_rotation_and_reflection_preserve_density():
@@ -39,3 +39,29 @@ def test_mask_and_version_are_explicit():
     assert version_a == version_b
     assert matrix_a.shape == matrix_b.shape
     assert not np.array_equal(matrix_a, matrix_b)
+
+
+def test_d4_grid_has_exactly_eight_unique_square_symmetries():
+    config = {
+        "transforms": {
+            "group": "d4",
+            "rotations": [0],
+            "reflections": ["none"],
+            "scales": [1],
+            "inversions": [False],
+        }
+    }
+    ops = list(transform_grid(config))
+    assert len(ops) == 8
+    assert len({op["group_element"] for op in ops}) == 8
+    matrix = np.array([[0, 1, 1], [0, 1, 0], [1, 0, 0]], dtype=np.uint8)
+    rendered = {transform_matrix(matrix, **op).tobytes() for op in ops}
+    assert len(rendered) == 8
+
+
+def test_orientation_embedding_is_axial_not_linear_angle():
+    matrix, _ = make_qr("https://example.invalid/axial", mask=2)
+    f0 = geometry_features(matrix)
+    f180 = geometry_features(np.rot90(matrix, 2))
+    assert np.isclose(f0["orientation_cos2"], f180["orientation_cos2"])
+    assert np.isclose(f0["orientation_sin2"], f180["orientation_sin2"])
