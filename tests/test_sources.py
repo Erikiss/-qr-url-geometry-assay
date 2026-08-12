@@ -69,8 +69,7 @@ def test_path_query_removes_host_and_scheme_for_both_corpora():
     onion_host = synthetic_onion_label(56, random.Random(4)) + ".onion"
     onion = f"http://{onion_host}{suffix}"
     assert (
-        _canonicalize_payload(surface, granularity="path_query", scheme_policy="preserve")
-        == suffix
+        _canonicalize_payload(surface, granularity="path_query", scheme_policy="preserve") == suffix
     )
     assert _canonicalize_payload(onion, granularity="path_query", scheme_policy="https") == suffix
 
