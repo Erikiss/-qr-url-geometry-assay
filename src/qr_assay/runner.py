@@ -12,6 +12,7 @@ from typing import Any
 
 from . import __version__
 from .analysis import analyze_features, write_report
+from .cluster import analyze_clustered_core
 from .config import config_sha256
 from .generate import generate_features
 from .sampling import prepare_payloads
@@ -46,6 +47,7 @@ def run_all(config: dict[str, Any]) -> dict[str, Any]:
     preparation = prepare_payloads(config)
     generation = generate_features(config)
     analysis = analyze_features(config)
+    clustered = analyze_clustered_core(config)
     report_path = write_report(config, preparation, generation, analysis)
     output_dir = Path(config["outputs"]["directory"])
     manifest = {
@@ -69,6 +71,13 @@ def run_all(config: dict[str, Any]) -> dict[str, Any]:
             "balance": analysis["balance"],
             "quality_control": analysis["quality_control"],
             "features_sha256": analysis["features_sha256"],
+        },
+        "cluster_analysis": {
+            "output": clustered["output"],
+            "core_metrics": clustered["core_metrics"],
+            "complete_matches_seen": clustered["complete_matches_seen"],
+            "invalid_matches": clustered["invalid_matches"],
+            "method": clustered["method"],
         },
         "report": str(report_path),
     }
