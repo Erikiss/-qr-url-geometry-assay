@@ -1,16 +1,18 @@
 import json
+import random
 from pathlib import Path
 
 import yaml
 
 from qr_assay.config import load_config
 from qr_assay.runner import run_all
+from qr_assay.synthetic import synthetic_onion_label
 
 
 def test_end_to_end(tmp_path: Path):
-    base32_a = "a" * 56
-    base32_b = "b" * 56
-    onions = [f"http://{base32_a}.onion/", f"http://{base32_b}.onion/x"]
+    rng = random.Random(11)
+    labels = [synthetic_onion_label(56, rng) for _ in range(2)]
+    onions = [f"http://{labels[0]}.onion/", f"http://{labels[1]}.onion/x"]
     surfaces = []
     for index, onion in enumerate(onions):
         onion_stripped = onion.split("://", 1)[1]
