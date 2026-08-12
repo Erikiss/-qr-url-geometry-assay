@@ -16,6 +16,7 @@ from .cluster import analyze_clustered_core
 from .codeword import analyze_codeword_regions
 from .config import config_sha256
 from .generate import generate_features
+from .null_qc import analyze_null_qc
 from .sampling import prepare_payloads
 
 
@@ -46,6 +47,7 @@ def run_all(config: dict[str, Any]) -> dict[str, Any]:
     started = datetime.now(UTC)
     start = time.perf_counter()
     preparation = prepare_payloads(config)
+    null_qc = analyze_null_qc(config)
     generation = generate_features(config)
     analysis = analyze_features(config)
     clustered = analyze_clustered_core(config)
@@ -71,6 +73,12 @@ def run_all(config: dict[str, Any]) -> dict[str, Any]:
             "packages": _package_versions(),
         },
         "preparation": preparation,
+        "null_qc": {
+            "output": null_qc["output"],
+            "synthetic_mode": null_qc["synthetic_mode"],
+            "passed_hard_invariants": null_qc["passed_hard_invariants"],
+            "corpora": null_qc["corpora"],
+        },
         "generation": generation,
         "analysis_summary": {
             "rows": analysis["rows"],
