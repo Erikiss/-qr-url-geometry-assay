@@ -1,0 +1,52 @@
+seed: 267010
+
+sources:
+  surface:
+    paths: [data/raw/surface_urls]
+    scan_limit: null
+    deduplicate: true
+    granularity: path_query
+  onion:
+    paths: [data/raw/onion]
+    scan_limit: null
+    deduplicate: true
+    granularity: path_query
+    versions: [3]
+
+sampling:
+  target_pairs: 25000
+  reservoir_per_length: 10000
+  min_bytes: 16
+  max_bytes: 512
+  scheme_policy: strip
+  length_weighting: overlap
+  synthetic_mode: grammar_random
+
+qr:
+  error_correction: M
+  # The ordinary stage-1 features still average all masks. The additional
+  # codeword diagnostic separately generates one configured mask and removes it
+  # deterministically before region geometry is measured.
+  masks: [0, 1, 2, 3, 4, 5, 6, 7]
+  border: 0
+
+transforms:
+  group: factorial
+  rotations: [0]
+  inversions: [false]
+  reflections: [none]
+  scales: [1]
+
+execution:
+  workers: 0
+  chunk_size: 256
+
+outputs:
+  directory: results/codeword
+  store_payload_text: true
+  png_examples_per_class: 2
+
+analysis:
+  density_bin_width: 0.005
+  codeword_diagnostics: true
+  codeword_mask: 0
