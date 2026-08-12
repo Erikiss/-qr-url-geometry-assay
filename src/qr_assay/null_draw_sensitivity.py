@@ -78,7 +78,7 @@ def _derive_seeds(base_seed: int, draws: int) -> tuple[int, ...]:
         raise ValueError("null draw sensitivity requires at least two seeds")
     seeds = []
     for index in range(draws):
-        material = f"{base_seed}:structural-null-draw:{index}".encode("utf-8")
+        material = f"{base_seed}:structural-null-draw:{index}".encode()
         seeds.append(int.from_bytes(hashlib.sha256(material).digest()[:4], "big"))
     return tuple(seeds)
 
@@ -191,7 +191,6 @@ def run_null_draw_sensitivity(
             natural_vectors[(match_id, corpus)] = vector
             natural_versions[(match_id, corpus)] = version
 
-    # effects[seed_index][match_id][corpus]
     effects: list[list[dict[str, np.ndarray]]] = []
     for null_seed in seeds:
         seed_effects = []
@@ -221,8 +220,6 @@ def run_null_draw_sensitivity(
         seed_means["onion"].append(onion_matrix.mean(axis=0))
         seed_means["did"].append(onion_matrix.mean(axis=0) - surface_matrix.mean(axis=0))
 
-    # Average null-draw effects inside each observational unit, then estimate the
-    # ordinary host-cluster sampling uncertainty on those unit-level averages.
     surface_reference = ClusterAccumulator()
     onion_reference = ClusterAccumulator()
     did_reference = IndependentDifference()
