@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from functools import lru_cache
 from typing import Any
 
 import numpy as np
@@ -60,6 +61,7 @@ def make_qr(
     return matrix, int(qr.version)
 
 
+@lru_cache(maxsize=40)
 def data_module_mask(version: int) -> np.ndarray:
     """Return 1 exactly where QR data/ECC/remainder modules may be mapped.
 
@@ -85,9 +87,12 @@ def data_module_mask(version: int) -> np.ndarray:
     qr.setup_type_info(True, 0)
     if int(version) >= 7:
         qr.setup_type_number(True)
-    return np.asarray([[cell is None for cell in row] for row in qr.modules], dtype=np.uint8)
+    result = np.asarray([[cell is None for cell in row] for row in qr.modules], dtype=np.uint8)
+    result.setflags(write=False)
+    return result
 
 
+@lru_cache(maxsize=160)
 def codeword_region_masks(
     version: int, error_correction: str = "M"
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -103,7 +108,8 @@ def codeword_region_masks(
     and alternating QR pad codewords. The separation nevertheless removes the
     downstream Reed-Solomon parity region as a distinct source of geometry.
     """
-    ecc = ERROR_CORRECTION[error_correction.upper()]
+    ecc_name = error_correction.upper()
+    ecc = ERROR_CORRECTION[ecc_name]
     rs_blocks = base.rs_blocks(int(version), ecc)
     data_codeword_bits = sum(block.data_count for block in rs_blocks) * 8
     total_codeword_bits = sum(block.total_count for block in rs_blocks) * 8
@@ -149,7 +155,21 @@ def codeword_region_masks(
     ):
         raise AssertionError("QR codeword regions do not partition the free-module region")
 
+    for region in (data_region, ecc_region, remainder_region):
+        region.setflags(write=False)
     return data_region, ecc_region, remainder_region
+
+
+@lru_cache(maxsize=320)
+def _qr_mask_toggle_matrix(version: int, mask: int) -> np.ndarray:
+    region = data_module_mask(int(version)).astype(bool)
+    mask_func = util.mask_func(int(mask))
+    toggle = np.zeros(region.shape, dtype=np.uint8)
+    for row, col in np.argwhere(region):
+        if mask_func(int(row), int(col)):
+            toggle[row, col] = 1
+    toggle.setflags(write=False)
+    return toggle
 
 
 def unmask_data_modules(matrix: np.ndarray, version: int, mask: int) -> np.ndarray:
@@ -159,13 +179,11 @@ def unmask_data_modules(matrix: np.ndarray, version: int, mask: int) -> np.ndarr
     diagnostic representation of the encoded bitstream geometry, not a rendered
     QR code that should be fed to a scanner or model.
     """
-    result = np.asarray(matrix, dtype=np.uint8).copy()
-    region = data_module_mask(int(version)).astype(bool)
-    mask_func = util.mask_func(int(mask))
-    for row, col in np.argwhere(region):
-        if mask_func(int(row), int(col)):
-            result[row, col] ^= 1
-    return np.ascontiguousarray(result, dtype=np.uint8)
+    data = np.asarray(matrix, dtype=np.uint8)
+    toggle = _qr_mask_toggle_matrix(int(version), int(mask))
+    if data.shape != toggle.shape:
+        raise ValueError("unmask_data_modules requires a border-free QR matrix")
+    return np.ascontiguousarray(data ^ toggle, dtype=np.uint8)
 
 
 def transform_matrix(
