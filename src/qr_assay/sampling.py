@@ -115,7 +115,12 @@ def _dedup_key(payload: str, host_sha256: str, granularity: str) -> str:
     return payload
 
 
-def _collect(config: dict[str, Any], kind: str) -> tuple[dict[int, Reservoir], dict[str, Any]]:
+def _collect(
+    config: dict[str, Any],
+    kind: str,
+    *,
+    allowed_lengths: set[int] | None = None,
+) -> tuple[dict[int, Reservoir], dict[str, Any]]:
     source_config = config["sources"][kind]
     paths = source_config.get("paths", [])
     if not paths:
@@ -132,13 +137,15 @@ def _collect(config: dict[str, Any], kind: str) -> tuple[dict[int, Reservoir], d
     }
     buckets: dict[int, Reservoir] = {}
     total = 0
+    eligible_before_dedup = 0
     accepted = 0
+    support_filtered_out = 0
     onion_version_counts: Counter[int] = Counter()
     rejected_onion_versions: Counter[int] = Counter()
 
-    # Deduplicate after canonicalization. path_query deliberately includes the
-    # natural host in the dedup key so repeated `/login` paths on different hosts
-    # survive as separate (clustered) observations.
+    # Deduplicate only payloads that can enter the declared estimand. In
+    # particular, a billion-row surface-domain source must not fill a seen-set
+    # with lengths that have zero support in the already collected onion corpus.
     must_dedup = granularity in {"origin", "path_query"} or bool(
         source_config.get("deduplicate", True)
     )
@@ -169,12 +176,21 @@ def _collect(config: dict[str, Any], kind: str) -> tuple[dict[int, Reservoir], d
                     continue
                 onion_version_counts[int(version)] += 1
 
-            host_sha256 = _natural_host_sha256(raw_payload)
             payload = _canonicalize_payload(
                 raw_payload, granularity=granularity, scheme_policy=scheme_policy
             )
             if not payload:
                 continue
+            length = len(payload.encode("utf-8"))
+            if length < min_bytes or length > max_bytes:
+                support_filtered_out += 1
+                continue
+            if allowed_lengths is not None and length not in allowed_lengths:
+                support_filtered_out += 1
+                continue
+
+            eligible_before_dedup += 1
+            host_sha256 = _natural_host_sha256(raw_payload)
             if must_dedup:
                 digest = stable_digest128(_dedup_key(payload, host_sha256, granularity))
                 if seen_memory is not None:
@@ -191,9 +207,7 @@ def _collect(config: dict[str, Any], kind: str) -> tuple[dict[int, Reservoir], d
                     if pending >= 10000:
                         seen_db.commit()
                         pending = 0
-            length = len(payload.encode("utf-8"))
-            if length < min_bytes or length > max_bytes:
-                continue
+
             accepted += 1
             if length not in buckets:
                 buckets[length] = Reservoir(capacity, random.Random(seed ^ (length * 0x9E3779B1)))
@@ -212,7 +226,10 @@ def _collect(config: dict[str, Any], kind: str) -> tuple[dict[int, Reservoir], d
 
     stats: dict[str, Any] = {
         "read": total,
+        "eligible_before_dedup": eligible_before_dedup,
         "accepted": accepted,
+        "support_filtered_out": support_filtered_out,
+        "support_filter_lengths": sorted(allowed_lengths) if allowed_lengths is not None else None,
         "length_buckets": len(buckets),
         "granularity": granularity,
         "scheme_policy": scheme_policy,
@@ -359,8 +376,14 @@ def prepare_payloads(config: dict[str, Any]) -> dict[str, Any]:
     output_dir = Path(config["outputs"]["directory"])
     output_dir.mkdir(parents=True, exist_ok=True)
     payload_path = output_dir / config["outputs"]["payloads_file"]
-    surface, surface_stats = _collect(config, "surface")
+
+    # Onion is normally the much smaller corpus and, for v3 origins, fixes the
+    # support to a single byte length. Collect it first, then skip surface lengths
+    # that provably cannot enter an exact-length match. This is an exact pruning,
+    # not a sampling approximation.
     onion, onion_stats = _collect(config, "onion")
+    surface, surface_stats = _collect(config, "surface", allowed_lengths=set(onion))
+
     target = int(config["sampling"]["target_pairs"])
     length_weighting = str(config["sampling"].get("length_weighting", "overlap"))
     matches, matching_stats = _match_payloads(
