@@ -25,6 +25,9 @@ DEFAULTS: dict[str, Any] = {
             "deduplicate": True,
             "granularity": "url",
             "hash_inputs": True,
+            # v2 Onion services are a historical format with a radically different
+            # hostname length. Do not mix them into the confirmatory v3 population.
+            "versions": [3],
         },
     },
     "sampling": {
@@ -133,9 +136,19 @@ def validate(config: dict[str, Any]) -> None:
         raise ConfigError(
             "sampling.synthetic_mode must be token_shuffle, class_permute, or grammar_random"
         )
+    valid_granularities = {"url", "origin", "path_query"}
     for corpus in ("surface", "onion"):
-        if config["sources"][corpus].get("granularity", "url") not in {"url", "origin"}:
-            raise ConfigError(f"sources.{corpus}.granularity must be url or origin")
+        granularity = config["sources"][corpus].get("granularity", "url")
+        if granularity not in valid_granularities:
+            raise ConfigError(
+                f"sources.{corpus}.granularity must be url, origin, or path_query"
+            )
+
+    onion_versions = [int(value) for value in config["sources"]["onion"].get("versions", [3])]
+    if not onion_versions or not set(onion_versions) <= {2, 3}:
+        raise ConfigError("sources.onion.versions must be a non-empty subset of [2, 3]")
+    if len(set(onion_versions)) != len(onion_versions):
+        raise ConfigError("sources.onion.versions must not contain duplicates")
 
     group = str(config["transforms"].get("group", "factorial"))
     if group not in {"factorial", "d4"}:
