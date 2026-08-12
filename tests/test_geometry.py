@@ -1,11 +1,15 @@
 import numpy as np
+import qrcode
 
 from qr_assay.geometry import (
+    ERROR_CORRECTION,
+    codeword_region_masks,
     data_module_mask,
     geometry_features,
     make_qr,
     transform_grid,
     transform_matrix,
+    unmask_data_modules,
 )
 
 
@@ -54,6 +58,69 @@ def test_data_module_mask_excludes_fixed_qr_function_patterns():
     assert region[-1, 0] == 0
     assert region[0, -1] == 0
     assert np.any(region == 1)
+
+
+def test_codeword_regions_are_disjoint_and_exactly_partition_free_modules():
+    for ecc in ("L", "M", "Q", "H"):
+        matrix, version = make_qr("https://example.invalid/codeword-partition", mask=3, error_correction=ecc)
+        free = data_module_mask(version).astype(bool)
+        data_region, ecc_region, remainder_region = codeword_region_masks(version, ecc)
+        data_region = data_region.astype(bool)
+        ecc_region = ecc_region.astype(bool)
+        remainder_region = remainder_region.astype(bool)
+
+        assert data_region.shape == matrix.shape
+        assert not np.any(data_region & ecc_region)
+        assert not np.any(data_region & remainder_region)
+        assert not np.any(ecc_region & remainder_region)
+        assert np.array_equal(data_region | ecc_region | remainder_region, free)
+        # ISO QR versions have only a small tail of remainder bits after codewords.
+        assert int(remainder_region.sum()) < 8
+        assert int(data_region.sum()) > 0
+        assert int(ecc_region.sum()) > 0
+
+
+def test_unmasking_recovers_same_free_module_bitstream_for_all_eight_masks():
+    payload = "https://example.invalid/the/same/payload?q=qr"
+    recovered = []
+    version_seen = None
+    free = None
+    for mask in range(8):
+        matrix, version = make_qr(payload, mask=mask, error_correction="M")
+        if version_seen is None:
+            version_seen = version
+            free = data_module_mask(version).astype(bool)
+        assert version == version_seen
+        unmasked = unmask_data_modules(matrix, version, mask)
+        recovered.append(unmasked[free])
+    assert all(np.array_equal(recovered[0], values) for values in recovered[1:])
+
+
+def test_fixed_function_region_is_payload_independent_at_fixed_version_ecc_and_mask():
+    matrix_a, version_a = make_qr("https://example.invalid/aaaaaaaaaaaaaaaa", mask=5)
+    matrix_b, version_b = make_qr("https://example.invalid/bbbbbbbbbbbbbbbb", mask=5)
+    assert version_a == version_b
+    free = data_module_mask(version_a).astype(bool)
+    assert np.array_equal(matrix_a[~free], matrix_b[~free])
+
+
+def test_make_qr_forces_byte_mode_instead_of_encoder_auto_mode():
+    payload = "1" * 40
+    _, forced_version = make_qr(payload, mask=0, error_correction="M")
+
+    auto = qrcode.QRCode(
+        version=None,
+        error_correction=ERROR_CORRECTION["M"],
+        box_size=1,
+        border=0,
+        mask_pattern=0,
+    )
+    auto.add_data(payload.encode("utf-8"), optimize=0)
+    auto.make(fit=True)
+
+    # A numeric-only payload is much denser in QR numeric mode. If this test
+    # fails, the assay has silently stopped forcing the intended byte-mode arm.
+    assert forced_version > int(auto.version)
 
 
 def test_scale_is_nearest_neighbor():
