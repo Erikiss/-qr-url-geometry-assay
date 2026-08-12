@@ -167,16 +167,20 @@ def grammar_matched(
     not a natural-language token. Path/query material still follows the chosen mode.
     Synthetic addresses are never resolved.
 
-    ``unit_key`` makes the random draw stable for the natural observational unit
-    even if match ordering changes. Direct callers may omit it, in which case the
-    legacy match_id is used as the deterministic unit key.
+    ``unit_key`` can explicitly define the natural observational unit. When it is
+    omitted, the SHA-256 of the effective payload is used, so the same payload gets
+    the same null draw even if matching order or match_id changes. ``match_id`` is
+    retained in the public signature for backwards compatibility only.
 
     A degenerate payload is allowed to remain unchanged when the declared null has
     no distinct permutation. We never silently fall back to a weaker null family.
     """
     if mode not in NULL_MODES:
         raise ValueError(f"Unknown synthetic null mode {mode!r}; choose from {sorted(NULL_MODES)}")
-    effective_unit_key = unit_key if unit_key is not None else str(match_id)
+    del match_id
+    effective_unit_key = (
+        unit_key if unit_key is not None else hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    )
     rng = _rng(seed, effective_unit_key, corpus, mode)
     if mode == "token_shuffle":
         result = _token_shuffle(payload, rng, corpus)
