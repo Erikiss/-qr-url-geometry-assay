@@ -98,9 +98,7 @@ def test_percent_encoding_remains_syntactically_valid_under_null_ladder():
     assert len(escapes) == 4
     assert len(randomized.encode("utf-8")) == len(payload.encode("utf-8"))
     # Character-class positions inside each valid escape stay in the same class.
-    for original, replacement in zip(
-        re.findall(r"%[0-9A-Fa-f]{2}", payload), escapes, strict=True
-    ):
+    for original, replacement in zip(re.findall(r"%[0-9A-Fa-f]{2}", payload), escapes, strict=True):
         for old, new in zip(original[1:], replacement[1:], strict=True):
             assert old.isdigit() == new.isdigit()
             assert old.islower() == new.islower()
