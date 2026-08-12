@@ -14,7 +14,8 @@ dependencies = [
   "numpy>=1.26,<3",
   "Pillow>=10.0,<12",
   "PyYAML>=6.0,<7",
-  "qrcode>=8.0,<9",
+  # QR matrices and the data-region mask both depend on this implementation.
+  "qrcode==8.2",
 ]
 
 [project.optional-dependencies]
