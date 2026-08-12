@@ -20,7 +20,8 @@ def _rng(seed: int, match_id: int, corpus: str, mode: str) -> random.Random:
     return random.Random(int.from_bytes(hashlib.sha256(material).digest()[:8], "big"))
 
 
-def _synthetic_onion_label(length: int, rng: random.Random) -> str:
+def synthetic_onion_label(length: int, rng: random.Random) -> str:
+    """Generate a syntactically valid legacy/v3 onion service label."""
     if length == 56:
         public_key = bytes(rng.getrandbits(8) for _ in range(32))
         version = b"\x03"
@@ -55,7 +56,7 @@ def _is_protected(index: int, protected: list[tuple[int, int]]) -> bool:
 def _replace_onion_label(chars: list[str], match: re.Match[str] | None, rng: random.Random) -> None:
     if match is None:
         return
-    label = _synthetic_onion_label(len(match.group(1)), rng)
+    label = synthetic_onion_label(len(match.group(1)), rng)
     chars[match.start(1) : match.end(1)] = list(label)
 
 
