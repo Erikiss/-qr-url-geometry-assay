@@ -88,6 +88,12 @@ class RunningStat:
         }
 
 
+def _empty_effects() -> dict[str, dict[str, RunningStat]]:
+    return {
+        contrast: {metric: RunningStat() for metric in INFERENCE_METRICS} for contrast in CONTRASTS
+    }
+
+
 def _iter_jsonl(path: Path):
     with open_text(path, "rt") as handle:
         for line in handle:
@@ -198,6 +204,15 @@ def _payload_stratum(primary_rows: list[dict[str, Any]], bin_width: float) -> tu
     )
 
 
+def _add_class_contrasts(
+    destination: dict[str, dict[str, RunningStat]],
+    class_means: dict[str, dict[str, float]],
+) -> None:
+    for contrast, (left, right) in CONTRASTS.items():
+        for metric in INFERENCE_METRICS:
+            destination[contrast][metric].add(class_means[left][metric] - class_means[right][metric])
+
+
 def analyze_features(config: dict[str, Any]) -> dict[str, Any]:
     output_dir = Path(config["outputs"]["directory"])
     path = output_dir / config["outputs"]["features_file"]
@@ -208,14 +223,14 @@ def analyze_features(config: dict[str, Any]) -> dict[str, Any]:
 
     strata_counts: dict[tuple[Any, ...], dict[str, int]] = defaultdict(lambda: defaultdict(int))
     all_groups: dict[tuple[Any, ...], dict[str, RunningStat]] = {}
-    paired_effects: dict[str, dict[str, RunningStat]] = {
-        contrast: {metric: RunningStat() for metric in INFERENCE_METRICS} for contrast in CONTRASTS
-    }
+    paired_effects = _empty_effects()
+    paired_effects_density_common_bin = _empty_effects()
     rows = 0
     qc_density_failures = 0
     qc_data_density_failures = 0
     match_violations = 0
     matches = 0
+    density_common_bin_matches = 0
     primary_payloads = 0
 
     current_match_id: int | None = None
@@ -234,7 +249,7 @@ def analyze_features(config: dict[str, Any]) -> dict[str, Any]:
         current_payload_primary = []
 
     def finish_match() -> None:
-        nonlocal matches, match_violations, match_records
+        nonlocal matches, density_common_bin_matches, match_violations, match_records
         if current_match_id is None:
             return
         matches += 1
@@ -250,6 +265,7 @@ def analyze_features(config: dict[str, Any]) -> dict[str, Any]:
             return
 
         class_means: dict[str, dict[str, float]] = {}
+        class_density_bins: dict[str, int] = {}
         invariants = {"byte_length": set(), "qr_version": set(), "error_correction": set()}
         for cls in CLASSES:
             rows_for_class = list(match_records[cls].values())
@@ -259,14 +275,21 @@ def analyze_features(config: dict[str, Any]) -> dict[str, Any]:
                 metric: sum(float(row[metric]) for row in rows_for_class) / len(rows_for_class)
                 for metric in INFERENCE_METRICS
             }
+            mean_base_data_density = sum(
+                float(row["base_data_density"]) for row in rows_for_class
+            ) / len(rows_for_class)
+            class_density_bins[cls] = int(mean_base_data_density / bin_width)
         if any(len(values) != 1 for values in invariants.values()):
             match_violations += 1
         else:
-            for contrast, (left, right) in CONTRASTS.items():
-                for metric in INFERENCE_METRICS:
-                    paired_effects[contrast][metric].add(
-                        class_means[left][metric] - class_means[right][metric]
-                    )
+            _add_class_contrasts(paired_effects, class_means)
+            # Conservative density sensitivity: preserve the original four-way
+            # match and keep it only when all four payloads occupy the same
+            # mean data/ECC-density bin. This avoids the v0.1 mistake of density
+            # balancing classes independently and silently breaking pairs.
+            if len(set(class_density_bins.values())) == 1:
+                density_common_bin_matches += 1
+                _add_class_contrasts(paired_effects_density_common_bin, class_means)
         match_records = defaultdict(dict)
 
     for row in _iter_jsonl(path):
@@ -309,6 +332,10 @@ def analyze_features(config: dict[str, Any]) -> dict[str, Any]:
     finish_payload_for_strata()
     finish_match()
 
+    # Marginal equal-count density balancing is retained only as a descriptive
+    # sensitivity table. It is not a paired estimand because classes can select
+    # different match IDs within a stratum. Paired density sensitivity is the
+    # common-bin match analysis above.
     quotas = {
         stratum: min(counts.get(cls, 0) for cls in CLASSES)
         for stratum, counts in strata_counts.items()
@@ -318,7 +345,7 @@ def analyze_features(config: dict[str, Any]) -> dict[str, Any]:
 
     used: dict[tuple[tuple[Any, ...], str], int] = defaultdict(int)
     selected_per_class: dict[str, int] = defaultdict(int)
-    balanced_groups: dict[tuple[Any, ...], dict[str, RunningStat]] = {}
+    marginal_balanced_groups: dict[tuple[Any, ...], dict[str, RunningStat]] = {}
     payload_buffer: list[dict[str, Any]] = []
     payload_key: tuple[int, str, str] | None = None
 
@@ -337,7 +364,7 @@ def analyze_features(config: dict[str, Any]) -> dict[str, Any]:
             used[key] += 1
             selected_per_class[cls] += 1
             for row in payload_buffer:
-                _add_group(balanced_groups, row)
+                _add_group(marginal_balanced_groups, row)
         payload_buffer = []
 
     for row in _iter_jsonl(path):
@@ -364,8 +391,13 @@ def analyze_features(config: dict[str, Any]) -> dict[str, Any]:
         "payloads": primary_payloads,
         "matches": matches,
         "all_groups": _serialize_groups(all_groups),
-        "balanced_groups": _serialize_groups(balanced_groups),
+        "marginal_density_balanced_groups": _serialize_groups(marginal_balanced_groups),
+        # Backward-compatible alias; explicitly labeled as marginal in metadata.
+        "balanced_groups": _serialize_groups(marginal_balanced_groups),
         "paired_effects": _serialize_paired_effects(paired_effects),
+        "paired_effects_density_common_bin": _serialize_paired_effects(
+            paired_effects_density_common_bin
+        ),
         "primary_feature_region": "data_ecc_modules_only",
         "inference_unit": "match_id after averaging all configured QR masks",
         "inference_note": (
@@ -376,6 +408,9 @@ def analyze_features(config: dict[str, Any]) -> dict[str, Any]:
         "balance": {
             "density_bin_width": bin_width,
             "density_basis": "mean base_data_density across masks",
+            "paired_common_bin_matches": density_common_bin_matches,
+            "paired_common_bin_fraction": density_common_bin_matches / matches if matches else 0.0,
+            "marginal_balance_is_pair_preserving": False,
             "eligible_strata": len(quotas),
             "selected_payloads": sum(selected_per_class.values()),
             "selected_per_class": {cls: selected_per_class.get(cls, 0) for cls in sorted(CLASSES)},
@@ -407,6 +442,19 @@ def _find_primary(groups: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def _effect_table_lines(effects: list[dict[str, Any]], core_metrics: set[str]) -> list[str]:
+    lines = []
+    for effect in effects:
+        if effect["metric"] not in core_metrics:
+            continue
+        lines.append(
+            f"| {effect['contrast']} | {effect['metric']} | {effect['n_matches']:,} | "
+            f"{effect['mean_difference']:.6g} | [{effect['ci95_low']:.6g}, {effect['ci95_high']:.6g}] | "
+            f"{effect['cohen_dz']:.4f} | {effect['p_holm']:.3g} |"
+        )
+    return lines
+
+
 def write_report(
     config: dict[str, Any],
     preparation: dict[str, Any],
@@ -415,7 +463,7 @@ def write_report(
 ) -> Path:
     output_dir = Path(config["outputs"]["directory"])
     report_path = output_dir / config["outputs"]["report_file"]
-    primary = _find_primary(analysis["balanced_groups"] or analysis["all_groups"])
+    primary = _find_primary(analysis["marginal_density_balanced_groups"] or analysis["all_groups"])
     lines = [
         "# QR URL Geometry Assay — run report",
         "",
@@ -428,10 +476,13 @@ def write_report(
         f"- Synthetic null mode: **{preparation['synthetic_mode']}**",
         f"- Primary feature region: **{analysis['primary_feature_region']}**",
         f"- Inference unit: **{analysis['inference_unit']}**",
+        f"- Four-way same-density-bin matches: **{analysis['balance']['paired_common_bin_matches']:,}**",
         "",
         "Rotation/reflection rows are stimulus-equivariance calibration. They are not evidence of neural cyclicity.",
         "",
-        "## Controlled baseline by mask (0°, normal polarity)",
+        "## Marginal density-balanced baseline by mask (descriptive only)",
+        "",
+        "This table equalizes class counts within density strata but is not pair-preserving. The paired common-bin sensitivity below is the valid density-conditioned paired analysis.",
         "",
         "| payload class | mask | n | full density | data/ECC density | data centroid radius | data radial mean | data cos(2θ) | data sin(2θ) |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
@@ -450,26 +501,22 @@ def write_report(
         "data_orientation_cos2",
         "data_orientation_sin2",
     }
-    core_effects = [
-        effect for effect in analysis["paired_effects"] if effect["metric"] in core_metrics
-    ]
     lines.extend(
         [
             "",
-            "## Payload-level paired effects (data/ECC region, averaged over masks)",
+            "## Primary paired effects (all matched units, averaged over masks)",
             "",
             "| contrast | metric | matched units | mean difference | 95% CI | Cohen dz | Holm p |",
             "|---|---|---:|---:|---:|---:|---:|",
-        ]
-    )
-    for effect in core_effects:
-        lines.append(
-            f"| {effect['contrast']} | {effect['metric']} | {effect['n_matches']:,} | "
-            f"{effect['mean_difference']:.6g} | [{effect['ci95_low']:.6g}, {effect['ci95_high']:.6g}] | "
-            f"{effect['cohen_dz']:.4f} | {effect['p_holm']:.3g} |"
-        )
-    lines.extend(
-        [
+            *_effect_table_lines(analysis["paired_effects"], core_metrics),
+            "",
+            "## Density-common-bin paired sensitivity",
+            "",
+            "Only complete four-way matches whose four payloads fall in the same mean data/ECC-density bin are retained; the original match_id is never broken.",
+            "",
+            "| contrast | metric | matched units | mean difference | 95% CI | Cohen dz | Holm p |",
+            "|---|---|---:|---:|---:|---:|---:|",
+            *_effect_table_lines(analysis["paired_effects_density_common_bin"], core_metrics),
             "",
             "**Inference warning.** Normal-approximation p-values are secondary. URL-granularity runs can contain repeated hosts/crawls and require clustered resampling before publication.",
             "",
