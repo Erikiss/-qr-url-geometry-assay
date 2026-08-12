@@ -37,6 +37,9 @@ DEFAULTS: dict[str, Any] = {
         "max_bytes": 512,
         "scheme_policy": "strip",
         "synthetic_mode": "grammar_random",
+        # Weight matched lengths by their shared empirical support rather than
+        # giving rare and common byte lengths equal influence.
+        "length_weighting": "overlap",
     },
     "qr": {
         "error_correction": "M",
@@ -136,6 +139,9 @@ def validate(config: dict[str, Any]) -> None:
         raise ConfigError(
             "sampling.synthetic_mode must be token_shuffle, class_permute, or grammar_random"
         )
+    if config["sampling"].get("length_weighting", "overlap") not in {"overlap", "equal_length"}:
+        raise ConfigError("sampling.length_weighting must be overlap or equal_length")
+
     valid_granularities = {"url", "origin", "path_query"}
     for corpus in ("surface", "onion"):
         granularity = config["sources"][corpus].get("granularity", "url")
