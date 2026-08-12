@@ -11,7 +11,7 @@ from typing import Any
 
 from .fileio import open_text
 
-GROUP_METRICS = (
+FULL_METRICS = (
     "density",
     "centroid_x",
     "centroid_y",
@@ -29,9 +29,27 @@ GROUP_METRICS = (
     "symmetry_horizontal",
     "symmetry_vertical",
 )
-# principal_angle_deg is axial (modulo 180 degrees) and must never be differenced
-# linearly. Inference uses its cos(2theta)/sin(2theta) representation instead.
-INFERENCE_METRICS = tuple(metric for metric in GROUP_METRICS if metric != "principal_angle_deg")
+DATA_METRICS = (
+    "data_density",
+    "data_centroid_x",
+    "data_centroid_y",
+    "data_centroid_radius",
+    "data_radial_mean",
+    "data_radial_std",
+    "data_cov_trace",
+    "data_principal_angle_deg",
+    "data_anisotropy",
+    "data_orientation_cos2",
+    "data_orientation_sin2",
+    "data_transition_h",
+    "data_transition_v",
+)
+GROUP_METRICS = FULL_METRICS + DATA_METRICS
+# Principal-axis orientation is axial (modulo 180 degrees). Never linearly
+# difference raw angles; use cos(2theta)/sin(2theta) instead.
+INFERENCE_METRICS = tuple(
+    metric for metric in GROUP_METRICS if "principal_angle_deg" not in metric
+)
 CLASSES = {
     "surface_natural",
     "onion_natural",
@@ -172,8 +190,10 @@ def _serialize_paired_effects(
 
 def _payload_stratum(primary_rows: list[dict[str, Any]], bin_width: float) -> tuple[Any, ...]:
     first = primary_rows[0]
-    mean_density = sum(float(row["base_density"]) for row in primary_rows) / len(primary_rows)
-    density_bin = int(mean_density / bin_width)
+    mean_data_density = sum(float(row["base_data_density"]) for row in primary_rows) / len(
+        primary_rows
+    )
+    density_bin = int(mean_data_density / bin_width)
     return (
         int(first["byte_length"]),
         int(first["qr_version"]),
@@ -198,13 +218,14 @@ def analyze_features(config: dict[str, Any]) -> dict[str, Any]:
     }
     rows = 0
     qc_density_failures = 0
+    qc_data_density_failures = 0
     match_violations = 0
     matches = 0
     primary_payloads = 0
 
     current_match_id: int | None = None
     match_records: dict[str, dict[int, dict[str, Any]]] = defaultdict(dict)
-    current_payload_key: tuple[str, str] | None = None
+    current_payload_key: tuple[int, str, str] | None = None
     current_payload_primary: list[dict[str, Any]] = []
 
     def finish_payload_for_strata() -> None:
@@ -259,8 +280,15 @@ def analyze_features(config: dict[str, Any]) -> dict[str, Any]:
         expected_density = (
             1.0 - float(row["base_density"]) if row["inverted"] else float(row["base_density"])
         )
+        expected_data_density = (
+            1.0 - float(row["base_data_density"])
+            if row["inverted"]
+            else float(row["base_data_density"])
+        )
         if abs(float(row["density"]) - expected_density) > 1e-12:
             qc_density_failures += 1
+        if abs(float(row["data_density"]) - expected_data_density) > 1e-12:
+            qc_data_density_failures += 1
         if not _primary(row):
             continue
 
@@ -275,7 +303,7 @@ def analyze_features(config: dict[str, Any]) -> dict[str, Any]:
         mask = int(row["mask"])
         match_records[cls][mask] = row
 
-        payload_key = (cls, row["payload_sha256"])
+        payload_key = (row_match_id, cls, row["payload_sha256"])
         if current_payload_key is None:
             current_payload_key = payload_key
         elif payload_key != current_payload_key:
@@ -297,7 +325,7 @@ def analyze_features(config: dict[str, Any]) -> dict[str, Any]:
     selected_per_class: dict[str, int] = defaultdict(int)
     balanced_groups: dict[tuple[Any, ...], dict[str, RunningStat]] = {}
     payload_buffer: list[dict[str, Any]] = []
-    payload_key: tuple[str, str] | None = None
+    payload_key: tuple[int, str, str] | None = None
 
     def flush_payload() -> None:
         nonlocal payload_buffer
@@ -318,7 +346,7 @@ def analyze_features(config: dict[str, Any]) -> dict[str, Any]:
         payload_buffer = []
 
     for row in _iter_jsonl(path):
-        key = (row["payload_class"], row["payload_sha256"])
+        key = (int(row["match_id"]), row["payload_class"], row["payload_sha256"])
         if payload_key is None:
             payload_key = key
         elif key != payload_key:
@@ -343,6 +371,7 @@ def analyze_features(config: dict[str, Any]) -> dict[str, Any]:
         "all_groups": _serialize_groups(all_groups),
         "balanced_groups": _serialize_groups(balanced_groups),
         "paired_effects": _serialize_paired_effects(paired_effects),
+        "primary_feature_region": "data_ecc_modules_only",
         "inference_unit": "match_id after averaging all configured QR masks",
         "inference_note": (
             "Normal-approximation p-values are secondary descriptive diagnostics. "
@@ -351,15 +380,19 @@ def analyze_features(config: dict[str, Any]) -> dict[str, Any]:
         "source_granularities": source_granularities,
         "balance": {
             "density_bin_width": bin_width,
+            "density_basis": "mean base_data_density across masks",
             "eligible_strata": len(quotas),
             "selected_payloads": sum(selected_per_class.values()),
             "selected_per_class": {cls: selected_per_class.get(cls, 0) for cls in sorted(CLASSES)},
         },
         "quality_control": {
             "density_transform_failures": qc_density_failures,
+            "data_density_transform_failures": qc_data_density_failures,
             "matched_control_failures": match_violations,
             "expected_masks_per_payload": sorted(expected_masks),
-            "passed": qc_density_failures == 0 and match_violations == 0,
+            "passed": qc_density_failures == 0
+            and qc_data_density_failures == 0
+            and match_violations == 0,
         },
         "features_sha256": digest.hexdigest(),
     }
@@ -398,29 +431,35 @@ def write_report(
         f"- QR transform rows: **{generation['rows']:,}**",
         f"- Quality control: **{'PASS' if analysis['quality_control']['passed'] else 'FAIL'}**",
         f"- Synthetic null mode: **{preparation['synthetic_mode']}**",
+        f"- Primary feature region: **{analysis['primary_feature_region']}**",
         f"- Inference unit: **{analysis['inference_unit']}**",
         "",
         "Rotation/reflection rows are stimulus-equivariance calibration. They are not evidence of neural cyclicity.",
         "",
         "## Controlled baseline by mask (0°, normal polarity)",
         "",
-        "| payload class | mask | n | density | centroid radius | radial mean | orient cos(2θ) | orient sin(2θ) |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|",
+        "| payload class | mask | n | full density | data/ECC density | data centroid radius | data radial mean | data cos(2θ) | data sin(2θ) |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for group in sorted(primary, key=lambda item: (item["payload_class"], item["mask"])):
         m = group["metrics"]
         lines.append(
             f"| {group['payload_class']} | {group['mask']} | {group['count']:,} | "
-            f"{m['density']['mean']:.6f} | {m['centroid_radius']['mean']:.6f} | "
-            f"{m['radial_mean']['mean']:.6f} | {m['orientation_cos2']['mean']:.6f} | "
-            f"{m['orientation_sin2']['mean']:.6f} |"
+            f"{m['density']['mean']:.6f} | {m['data_density']['mean']:.6f} | "
+            f"{m['data_centroid_radius']['mean']:.6f} | {m['data_radial_mean']['mean']:.6f} | "
+            f"{m['data_orientation_cos2']['mean']:.6f} | {m['data_orientation_sin2']['mean']:.6f} |"
         )
-    core_metrics = {"radial_mean", "centroid_radius", "orientation_cos2", "orientation_sin2"}
+    core_metrics = {
+        "data_radial_mean",
+        "data_centroid_radius",
+        "data_orientation_cos2",
+        "data_orientation_sin2",
+    }
     core_effects = [effect for effect in analysis["paired_effects"] if effect["metric"] in core_metrics]
     lines.extend(
         [
             "",
-            "## Payload-level paired effects (averaged over masks)",
+            "## Payload-level paired effects (data/ECC region, averaged over masks)",
             "",
             "| contrast | metric | matched units | mean difference | 95% CI | Cohen dz | Holm p |",
             "|---|---|---:|---:|---:|---:|---:|",
