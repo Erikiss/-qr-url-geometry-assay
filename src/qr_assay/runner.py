@@ -1,0 +1,65 @@
+from __future__ import annotations
+
+import json
+import os
+import platform
+import subprocess
+import time
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from . import __version__
+from .analysis import analyze_features, write_report
+from .config import config_sha256
+from .generate import generate_features
+from .sampling import prepare_payloads
+
+
+def _git_commit() -> str | None:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=3,
+        ).strip()
+    except (subprocess.SubprocessError, FileNotFoundError):
+        return None
+
+
+def run_all(config: dict[str, Any]) -> dict[str, Any]:
+    started = datetime.now(UTC)
+    start = time.perf_counter()
+    preparation = prepare_payloads(config)
+    generation = generate_features(config)
+    analysis = analyze_features(config)
+    report_path = write_report(config, preparation, generation, analysis)
+    output_dir = Path(config["outputs"]["directory"])
+    manifest = {
+        "assay_version": __version__,
+        "started_at": started.isoformat(),
+        "finished_at": datetime.now(UTC).isoformat(),
+        "elapsed_seconds": time.perf_counter() - start,
+        "config_sha256": config_sha256(config),
+        "config": config,
+        "environment": {
+            "python": platform.python_version(),
+            "platform": platform.platform(),
+            "logical_cpus": os.cpu_count(),
+            "git_commit": _git_commit(),
+        },
+        "preparation": preparation,
+        "generation": generation,
+        "analysis_summary": {
+            "rows": analysis["rows"],
+            "balance": analysis["balance"],
+            "quality_control": analysis["quality_control"],
+            "features_sha256": analysis["features_sha256"],
+        },
+        "report": str(report_path),
+    }
+    manifest_path = output_dir / config["outputs"]["manifest_file"]
+    with manifest_path.open("w", encoding="utf-8") as handle:
+        json.dump(manifest, handle, indent=2, sort_keys=True)
+    return manifest

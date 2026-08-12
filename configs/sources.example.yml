@@ -1,0 +1,23 @@
+downloads:
+  # Current, curated natural onion URLs. This is a clearnet GitHub download;
+  # the assay never connects to any onion service.
+  - name: real-world-onion-sites-master.csv
+    url: https://raw.githubusercontent.com/alecmuffett/real-world-onion-sites/master/master.csv
+
+  - name: real-world-onion-sites-ct-log.txt
+    url: https://raw.githubusercontent.com/alecmuffett/real-world-onion-sites/master/ct-log.txt
+
+  - name: real-world-onion-sites-securedrop.csv
+    url: https://raw.githubusercontent.com/alecmuffett/real-world-onion-sites/master/securedrop-api.csv
+
+  - name: securedrop-directory.json
+    url: https://securedrop.org/api/v1/directory/
+
+  - name: tor-project-onion-services.html
+    url: https://onion.torproject.org/
+
+  # Add historical/current research crawl exports here. Pin SHA-256 whenever
+  # the source is immutable.
+  # - name: historical-onion-crawl.jsonl.xz
+  #   url: https://example.edu/datasets/onion-crawl.jsonl.xz
+  #   sha256: ...

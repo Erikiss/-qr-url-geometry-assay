@@ -1,0 +1,41 @@
+seed: 267010
+
+sources:
+  surface:
+    paths: [data/raw/demo/surface.txt]
+    scan_limit: 1000
+    deduplicate: true
+  onion:
+    paths: [data/raw/demo/onion.txt]
+    scan_limit: 1000
+    deduplicate: true
+    granularity: url
+
+sampling:
+  target_pairs: 100
+  reservoir_per_length: 500
+  min_bytes: 16
+  max_bytes: 256
+
+qr:
+  error_correction: M
+  masks: [0, 1, 2, 3, 4, 5, 6, 7]
+  border: 0
+
+transforms:
+  rotations: [0, 90, 180, 270]
+  inversions: [false, true]
+  reflections: [none]
+  scales: [1]
+
+execution:
+  workers: 2
+  chunk_size: 32
+
+outputs:
+  directory: results/smoke
+  store_payload_text: true
+  png_examples_per_class: 1
+
+analysis:
+  density_bin_width: 0.01

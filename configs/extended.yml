@@ -1,0 +1,41 @@
+seed: 267010
+
+sources:
+  surface:
+    paths: [data/raw/surface]
+    scan_limit: 10000000
+    deduplicate: false
+  onion:
+    paths: [data/raw/onion]
+    scan_limit: null
+    deduplicate: true
+    granularity: url
+
+sampling:
+  target_pairs: 100000
+  reservoir_per_length: 10000
+  min_bytes: 16
+  max_bytes: 512
+
+qr:
+  error_correction: M
+  masks: [0, 1, 2, 3, 4, 5, 6, 7]
+  border: 0
+
+transforms:
+  rotations: [0, 90, 180, 270]
+  inversions: [false, true]
+  reflections: [none, horizontal, vertical, diagonal, anti_diagonal]
+  scales: [1, 2]
+
+execution:
+  workers: 0
+  chunk_size: 256
+
+outputs:
+  directory: results/extended
+  store_payload_text: true
+  png_examples_per_class: 2
+
+analysis:
+  density_bin_width: 0.005

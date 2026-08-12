@@ -1,0 +1,49 @@
+seed: 267010
+
+sources:
+  surface:
+    paths: [data/raw/surface]
+    scan_limit: null
+    deduplicate: false
+  onion:
+    paths: [data/raw/onion]
+    scan_limit: null
+    deduplicate: true
+    # Site-level exhaustive run: every natural onion host counts once, even if
+    # historical crawls contain many paths from that host.
+    granularity: origin
+
+sampling:
+  # Raise this to the number of deduplicated natural onion URLs if an exhaustive
+  # matched run is wanted. The pipeline stops cleanly at the available overlap.
+  target_pairs: 1500000
+  # In origin mode almost every v3 onion URL is 70 bytes, so this bucket must
+  # be as large as the requested exhaustive match count.
+  reservoir_per_length: 1500000
+  min_bytes: 16
+  max_bytes: 1024
+
+qr:
+  error_correction: M
+  masks: [0, 1, 2, 3, 4, 5, 6, 7]
+  border: 0
+
+transforms:
+  rotations: [0, 90, 180, 270]
+  inversions: [false, true]
+  # The preregistered full run is the primary 2 x 4 polarity/rotation design.
+  # Reflection and scale are available in configs/extended.yml.
+  reflections: [none]
+  scales: [1]
+
+execution:
+  workers: 0
+  chunk_size: 512
+
+outputs:
+  directory: results/full
+  store_payload_text: true
+  png_examples_per_class: 3
+
+analysis:
+  density_bin_width: 0.005
