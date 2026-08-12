@@ -8,6 +8,7 @@ from typing import Any
 
 FAMILY_ALPHA = 0.05
 PREDECLARED_FAMILY_SIZE = 8  # 2 natural-vs-null contrasts x 4 core metrics
+MIN_CONFIRMATORY_CLUSTERS = 20
 
 
 def _normal_two_sided_p(mean: float, se: float) -> float:
@@ -22,9 +23,6 @@ def _holm_adjust(rows: list[dict[str, Any]], *, family_size: int) -> None:
     ordered = sorted(estimable, key=lambda index: float(rows[index]["p_two_sided_normal"]))
     previous = 0.0
     for rank, index in enumerate(ordered):
-        # Use the full preregistered family size even if some cells are currently
-        # non-estimable. This is conservative and prevents a failed cell from
-        # silently shrinking the multiplicity burden.
         multiplier = max(1, family_size - rank)
         adjusted = min(1.0, multiplier * float(rows[index]["p_two_sided_normal"]))
         adjusted = max(previous, adjusted)
@@ -51,14 +49,18 @@ def _level_rows(clustered: dict[str, Any], level: str, alpha: float) -> list[dic
             p = _normal_two_sided_p(mean, se) if estimable else None
             low = mean - critical * se if estimable else None
             high = mean + critical * se if estimable else None
+            raw_count = int(source_row["cluster_count"])
+            effective_count = float(source_row["effective_cluster_count"])
+            raw_ok = raw_count >= MIN_CONFIRMATORY_CLUSTERS
+            effective_ok = effective_count >= MIN_CONFIRMATORY_CLUSTERS
             rows.append(
                 {
                     "contrast": contrast,
                     "metric": source_row["metric"],
                     "cluster_level": level,
                     "n_matches": int(source_row["n_matches"]),
-                    "cluster_count": int(source_row["cluster_count"]),
-                    "effective_cluster_count": float(source_row["effective_cluster_count"]),
+                    "cluster_count": raw_count,
+                    "effective_cluster_count": effective_count,
                     "max_cluster_size": int(source_row["max_cluster_size"]),
                     "mean_difference": mean,
                     "cr1_standard_error": se,
@@ -69,10 +71,9 @@ def _level_rows(clustered: dict[str, Any], level: str, alpha: float) -> list[dic
                     "family_alpha": alpha,
                     "family_size": PREDECLARED_FAMILY_SIZE,
                     "estimable": estimable,
-                    "cluster_count_ge_20": bool(source_row["cluster_count_ge_20"]),
-                    "eligible_for_confirmatory_claim": bool(
-                        estimable and source_row["cluster_count_ge_20"]
-                    ),
+                    "cluster_count_ge_20": raw_ok,
+                    "effective_cluster_count_ge_20": effective_ok,
+                    "eligible_for_confirmatory_claim": bool(estimable and raw_ok and effective_ok),
                 }
             )
 
@@ -109,15 +110,19 @@ def analyze_familywise_core(
     result = {
         "alpha": alpha,
         "predeclared_family_size": PREDECLARED_FAMILY_SIZE,
+        "minimum_raw_clusters": MIN_CONFIRMATORY_CLUSTERS,
+        "minimum_effective_clusters": MIN_CONFIRMATORY_CLUSTERS,
         "family_definition": "2 confirmatory natural-vs-null contrasts x 4 preregistered core metrics",
         "host": _level_rows(clustered, "host", alpha),
         "source": _level_rows(clustered, "source", alpha),
         "interpretation": (
-            "Host-level rows are primary. Holm-adjusted normal p-values and Bonferroni simultaneous "
-            "normal intervals control the fixed eight-cell family under the same large-cluster "
-            "approximation as the CR1 report. Rows with fewer than 20 clusters are not eligible for "
-            "a confirmatory claim even if a nominal or adjusted threshold is crossed. Source-file "
-            "rows are sensitivity diagnostics, not automatically independent-crawl inference."
+            "Host-level rows are primary. Claim eligibility requires both at least 20 observed "
+            "clusters and an effective cluster count of at least 20, in addition to a finite "
+            "positive CR1 standard error. This blocks severe cluster-size imbalance from being "
+            "hidden by a large nominal cluster count. Holm-adjusted normal p-values and Bonferroni "
+            "simultaneous normal intervals control the fixed eight-cell family under the large-"
+            "cluster approximation. Source-file rows are sensitivity diagnostics, not automatically "
+            "independent-crawl inference."
         ),
     }
     output_dir = Path(config["outputs"]["directory"])
