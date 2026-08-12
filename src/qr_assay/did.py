@@ -6,7 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from statistics import NormalDist
-from typing import Any, Hashable
+from typing import Any
 
 import numpy as np
 
@@ -18,120 +18,46 @@ DID_ALPHA = 0.05
 
 
 @dataclass
-class GroupTotal:
-    count: int = 0
-    sums: np.ndarray = field(default_factory=lambda: np.zeros(len(CORE_METRICS), dtype=np.float64))
-
-
-@dataclass
-class TwoWayAccumulator:
+class SideAccumulator:
     n: int = 0
     sums: np.ndarray = field(default_factory=lambda: np.zeros(len(CORE_METRICS), dtype=np.float64))
-    a: dict[Hashable, GroupTotal] = field(default_factory=dict)
-    b: dict[Hashable, GroupTotal] = field(default_factory=dict)
-    ab: dict[tuple[Hashable, Hashable], GroupTotal] = field(default_factory=dict)
+    clusters: dict[str, list[Any]] = field(default_factory=dict)
 
-    @staticmethod
-    def _add_group(table: dict[Any, GroupTotal], key: Hashable, values: np.ndarray) -> None:
-        if key in {None, ""}:
-            raise ValueError("Two-way cluster key must be present")
-        total = table.get(key)
-        if total is None:
-            total = GroupTotal()
-            table[key] = total
-        total.count += 1
-        total.sums += values
-
-    def add(self, values: np.ndarray, *, cluster_a: Hashable, cluster_b: Hashable) -> None:
+    def add(self, values: np.ndarray, *, cluster: str) -> None:
+        if not cluster:
+            raise ValueError("Natural cluster key must be present")
         vector = np.asarray(values, dtype=np.float64)
         if vector.shape != (len(CORE_METRICS),):
-            raise ValueError("Two-way effect vector has an unexpected shape")
+            raise ValueError("Side effect vector has an unexpected shape")
         self.n += 1
         self.sums += vector
-        self._add_group(self.a, cluster_a, vector)
-        self._add_group(self.b, cluster_b, vector)
-        self._add_group(self.ab, (cluster_a, cluster_b), vector)
+        if cluster not in self.clusters:
+            self.clusters[cluster] = [0, np.zeros(len(CORE_METRICS), dtype=np.float64)]
+        self.clusters[cluster][0] += 1
+        self.clusters[cluster][1] += vector
 
     def mean(self) -> np.ndarray:
-        return self.sums / self.n if self.n else np.zeros(len(CORE_METRICS), dtype=np.float64)
+        return self.sums / self.n if self.n else np.full(len(CORE_METRICS), np.nan)
 
-    def _component_variance(self, table: dict[Any, GroupTotal], mean: np.ndarray) -> np.ndarray:
-        groups = len(table)
+    def variance(self) -> np.ndarray:
+        groups = len(self.clusters)
         if self.n == 0 or groups < 2:
             return np.full(len(CORE_METRICS), np.nan)
+        mean = self.mean()
         score_squares = np.zeros(len(CORE_METRICS), dtype=np.float64)
-        for total in table.values():
-            score = total.sums - total.count * mean
+        for count, sums in self.clusters.values():
+            score = sums - count * mean
             score_squares += np.square(score)
         return (groups / (groups - 1)) * score_squares / (self.n**2)
 
-    @staticmethod
-    def _effective_clusters(table: dict[Any, GroupTotal]) -> float:
-        counts = np.asarray([total.count for total in table.values()], dtype=np.float64)
+    def effective_clusters(self) -> float:
+        counts = np.asarray([value[0] for value in self.clusters.values()], dtype=np.float64)
         if not counts.size:
             return 0.0
         return float(counts.sum() ** 2 / np.square(counts).sum())
 
-    @staticmethod
-    def _max_cluster(table: dict[Any, GroupTotal]) -> int:
-        return max((total.count for total in table.values()), default=0)
-
-    def summarize(self, *, level_a: str, level_b: str) -> list[dict[str, Any]]:
-        mean = self.mean()
-        var_a = self._component_variance(self.a, mean)
-        var_b = self._component_variance(self.b, mean)
-        var_ab = self._component_variance(self.ab, mean)
-        rows = []
-        for index, metric in enumerate(CORE_METRICS):
-            components_finite = bool(
-                np.isfinite(var_a[index])
-                and np.isfinite(var_b[index])
-                and np.isfinite(var_ab[index])
-            )
-            raw_variance = (
-                float(var_a[index] + var_b[index] - var_ab[index])
-                if components_finite
-                else None
-            )
-            negative_variance = bool(raw_variance is not None and raw_variance < 0.0)
-            variance = max(0.0, raw_variance) if raw_variance is not None else None
-            se = math.sqrt(variance) if variance is not None else None
-            rows.append(
-                {
-                    "metric": metric,
-                    "n_matches": self.n,
-                    "mean_difference_in_differences": float(mean[index]),
-                    "cluster_level_a": level_a,
-                    "cluster_level_b": level_b,
-                    "cluster_count_a": len(self.a),
-                    "cluster_count_b": len(self.b),
-                    "intersection_cluster_count": len(self.ab),
-                    "effective_cluster_count_a": self._effective_clusters(self.a),
-                    "effective_cluster_count_b": self._effective_clusters(self.b),
-                    "max_cluster_size_a": self._max_cluster(self.a),
-                    "max_cluster_size_b": self._max_cluster(self.b),
-                    "variance_component_a": (
-                        float(var_a[index]) if np.isfinite(var_a[index]) else None
-                    ),
-                    "variance_component_b": (
-                        float(var_b[index]) if np.isfinite(var_b[index]) else None
-                    ),
-                    "variance_component_intersection": (
-                        float(var_ab[index]) if np.isfinite(var_ab[index]) else None
-                    ),
-                    "cgm_variance_raw": raw_variance,
-                    "cgm_standard_error": se,
-                    "negative_cgm_variance": negative_variance,
-                    "estimable": bool(
-                        se is not None
-                        and math.isfinite(se)
-                        and se > 0.0
-                        and not negative_variance
-                    ),
-                    "cluster_counts_ge_20": len(self.a) >= 20 and len(self.b) >= 20,
-                }
-            )
-        return rows
+    def max_cluster(self) -> int:
+        return max((int(value[0]) for value in self.clusters.values()), default=0)
 
 
 def _normal_p(mean: float, se: float) -> float:
@@ -142,9 +68,9 @@ def _apply_familywise(rows: list[dict[str, Any]], *, alpha: float = DID_ALPHA) -
     if len(rows) != DID_FAMILY_SIZE:
         raise ValueError(f"DiD family must contain exactly {DID_FAMILY_SIZE} core metrics")
     critical = NormalDist().inv_cdf(1.0 - alpha / (2.0 * DID_FAMILY_SIZE))
-    estimable_indices = []
+    estimable = []
     for index, row in enumerate(rows):
-        se = row["cgm_standard_error"]
+        se = row["independent_cluster_standard_error"]
         eligible = bool(row["estimable"] and row["cluster_counts_ge_20"])
         row["eligible_for_confirmatory_claim"] = eligible
         if se is not None and float(se) > 0 and math.isfinite(float(se)):
@@ -153,29 +79,22 @@ def _apply_familywise(rows: list[dict[str, Any]], *, alpha: float = DID_ALPHA) -
             row["p_two_sided_normal"] = _normal_p(mean, se_value)
             row["bonferroni_simultaneous_ci_low"] = mean - critical * se_value
             row["bonferroni_simultaneous_ci_high"] = mean + critical * se_value
-            row["bonferroni_critical_value"] = critical
-            estimable_indices.append(index)
+            estimable.append(index)
         else:
             row["p_two_sided_normal"] = None
             row["bonferroni_simultaneous_ci_low"] = None
             row["bonferroni_simultaneous_ci_high"] = None
-            row["bonferroni_critical_value"] = critical
+        row["bonferroni_critical_value"] = critical
 
-    ordered = sorted(
-        estimable_indices,
-        key=lambda index: float(rows[index]["p_two_sided_normal"]),
-    )
+    ordered = sorted(estimable, key=lambda i: float(rows[i]["p_two_sided_normal"]))
     previous = 0.0
     for rank, index in enumerate(ordered):
-        adjusted = min(
-            1.0,
-            (DID_FAMILY_SIZE - rank) * float(rows[index]["p_two_sided_normal"]),
-        )
+        adjusted = min(1.0, (DID_FAMILY_SIZE - rank) * float(rows[index]["p_two_sided_normal"]))
         adjusted = max(previous, adjusted)
         rows[index]["p_holm_familywise"] = adjusted
         previous = adjusted
     for index, row in enumerate(rows):
-        if index not in estimable_indices:
+        if index not in estimable:
             row["p_holm_familywise"] = None
         low = row["bonferroni_simultaneous_ci_low"]
         high = row["bonferroni_simultaneous_ci_high"]
@@ -187,9 +106,7 @@ def _apply_familywise(rows: list[dict[str, Any]], *, alpha: float = DID_ALPHA) -
             and (float(low) > 0.0 or float(high) < 0.0)
         )
         row["holm_reject_familywise_0_05"] = bool(
-            row["eligible_for_confirmatory_claim"]
-            and holm is not None
-            and float(holm) <= alpha
+            row["eligible_for_confirmatory_claim"] and holm is not None and float(holm) <= alpha
         )
         row["strict_confirmatory_pass"] = bool(
             row["holm_reject_familywise_0_05"] and row["bonferroni_ci_excludes_zero"]
@@ -213,17 +130,12 @@ def _primary(row: dict[str, Any]) -> bool:
 
 
 def analyze_difference_in_differences(config: dict[str, Any]) -> dict[str, Any]:
-    """Test whether natural-vs-null QR geometry differs between Onion and Surface.
+    """Compare Onion and Surface natural-minus-null effects without invented pairing covariance.
 
-    Per match and metric:
-
-        (onion_natural - onion_synthetic)
-        - (surface_natural - surface_synthetic)
-
-    All configured QR masks are averaged before this contrast. Host uncertainty is
-    two-way clustered by the natural Surface host and natural Onion host using the
-    Cameron-Gelbach-Miller inclusion-exclusion form V_A + V_B - V_AB. Source-file
-    clustering is reported as a parallel sensitivity analysis.
+    Exact byte-length pairing is a design/balance device only. The point estimate is
+    mean(Onion natural-null) - mean(Surface natural-null). Its variance is the sum
+    of the two one-way natural-host-clustered variances, so arbitrary re-pairing
+    within a matched length stratum cannot change either the estimate or its SE.
     """
     output_dir = Path(config["outputs"]["directory"])
     features_path = output_dir / config["outputs"]["features_file"]
@@ -236,8 +148,8 @@ def analyze_difference_in_differences(config: dict[str, Any]) -> dict[str, Any]:
         "onion_natural",
         "onion_synthetic",
     }
-    host_acc = TwoWayAccumulator()
-    source_acc = TwoWayAccumulator()
+    host = {"surface": SideAccumulator(), "onion": SideAccumulator()}
+    source = {"surface": SideAccumulator(), "onion": SideAccumulator()}
     current_match_id: int | None = None
     records: dict[str, dict[int, dict[str, Any]]] = defaultdict(dict)
     complete_matches = 0
@@ -252,66 +164,59 @@ def analyze_difference_in_differences(config: dict[str, Any]) -> dict[str, Any]:
             records = defaultdict(dict)
             return
 
-        means: dict[str, np.ndarray] = {}
-        for cls in classes:
-            rows = list(records[cls].values())
-            means[cls] = np.asarray(
-                [
-                    sum(float(row[metric]) for row in rows) / len(rows)
-                    for metric in CORE_METRICS
-                ],
-                dtype=np.float64,
-            )
+        effects: dict[str, np.ndarray] = {}
+        cluster_keys: dict[str, tuple[str, str]] = {}
+        for corpus in ("surface", "onion"):
+            natural_rows = list(records[f"{corpus}_natural"].values())
+            synthetic_rows = list(records[f"{corpus}_synthetic"].values())
+            hosts = {row.get("natural_host_sha256") for row in natural_rows}
+            hosts_syn = {row.get("natural_host_sha256") for row in synthetic_rows}
+            sources = {row.get("natural_source_sha256") for row in natural_rows}
+            sources_syn = {row.get("natural_source_sha256") for row in synthetic_rows}
+            metadata = {
+                (row.get("byte_length"), row.get("qr_version"), row.get("error_correction"))
+                for row in natural_rows + synthetic_rows
+            }
+            if (
+                len(hosts) != 1
+                or hosts != hosts_syn
+                or len(sources) != 1
+                or sources != sources_syn
+                or next(iter(hosts)) in {None, ""}
+                or next(iter(sources)) in {None, ""}
+                or len(metadata) != 1
+                or any(value is None for value in next(iter(metadata)))
+            ):
+                invalid_matches += 1
+                records = defaultdict(dict)
+                return
+            values = []
+            for metric in CORE_METRICS:
+                natural_mean = sum(float(row[metric]) for row in natural_rows) / len(natural_rows)
+                synthetic_mean = sum(float(row[metric]) for row in synthetic_rows) / len(synthetic_rows)
+                values.append(natural_mean - synthetic_mean)
+            effects[corpus] = np.asarray(values, dtype=np.float64)
+            cluster_keys[corpus] = (str(next(iter(hosts))), str(next(iter(sources))))
 
-        surface_nat = list(records["surface_natural"].values())
-        surface_syn = list(records["surface_synthetic"].values())
-        onion_nat = list(records["onion_natural"].values())
-        onion_syn = list(records["onion_synthetic"].values())
-
-        surface_hosts = {row.get("natural_host_sha256") for row in surface_nat}
-        surface_hosts_syn = {row.get("natural_host_sha256") for row in surface_syn}
-        onion_hosts = {row.get("natural_host_sha256") for row in onion_nat}
-        onion_hosts_syn = {row.get("natural_host_sha256") for row in onion_syn}
-        surface_sources = {row.get("natural_source_sha256") for row in surface_nat}
-        surface_sources_syn = {row.get("natural_source_sha256") for row in surface_syn}
-        onion_sources = {row.get("natural_source_sha256") for row in onion_nat}
-        onion_sources_syn = {row.get("natural_source_sha256") for row in onion_syn}
-
-        valid_clusters = (
-            len(surface_hosts) == 1
-            and surface_hosts == surface_hosts_syn
-            and len(onion_hosts) == 1
-            and onion_hosts == onion_hosts_syn
-            and len(surface_sources) == 1
-            and surface_sources == surface_sources_syn
-            and len(onion_sources) == 1
-            and onion_sources == onion_sources_syn
-            and next(iter(surface_hosts)) not in {None, ""}
-            and next(iter(onion_hosts)) not in {None, ""}
-            and next(iter(surface_sources)) not in {None, ""}
-            and next(iter(onion_sources)) not in {None, ""}
-        )
-        if not valid_clusters:
+        surface_meta = {
+            (row.get("byte_length"), row.get("qr_version"), row.get("error_correction"))
+            for cls in ("surface_natural", "surface_synthetic")
+            for row in records[cls].values()
+        }
+        onion_meta = {
+            (row.get("byte_length"), row.get("qr_version"), row.get("error_correction"))
+            for cls in ("onion_natural", "onion_synthetic")
+            for row in records[cls].values()
+        }
+        if surface_meta != onion_meta:
             invalid_matches += 1
             records = defaultdict(dict)
             return
 
-        did = (
-            means["onion_natural"]
-            - means["onion_synthetic"]
-            - means["surface_natural"]
-            + means["surface_synthetic"]
-        )
-        host_acc.add(
-            did,
-            cluster_a=str(next(iter(surface_hosts))),
-            cluster_b=str(next(iter(onion_hosts))),
-        )
-        source_acc.add(
-            did,
-            cluster_a=str(next(iter(surface_sources))),
-            cluster_b=str(next(iter(onion_sources))),
-        )
+        for corpus in ("surface", "onion"):
+            host_key, source_key = cluster_keys[corpus]
+            host[corpus].add(effects[corpus], cluster=host_key)
+            source[corpus].add(effects[corpus], cluster=source_key)
         complete_matches += 1
         records = defaultdict(dict)
 
@@ -327,14 +232,49 @@ def analyze_difference_in_differences(config: dict[str, Any]) -> dict[str, Any]:
         records[row["payload_class"]][int(row["mask"])] = row
     finish_match()
 
-    host_rows = host_acc.summarize(level_a="surface_host", level_b="onion_host")
-    source_rows = source_acc.summarize(
-        level_a="surface_source_file",
-        level_b="onion_source_file",
-    )
-    _apply_familywise(host_rows)
-    _apply_familywise(source_rows)
+    def summarize(level: str) -> list[dict[str, Any]]:
+        tables = host if level == "host" else source
+        surface = tables["surface"]
+        onion = tables["onion"]
+        mean = onion.mean() - surface.mean()
+        var_surface = surface.variance()
+        var_onion = onion.variance()
+        rows = []
+        for index, metric in enumerate(CORE_METRICS):
+            finite = bool(np.isfinite(var_surface[index]) and np.isfinite(var_onion[index]))
+            variance = float(var_surface[index] + var_onion[index]) if finite else None
+            se = math.sqrt(max(0.0, variance)) if variance is not None else None
+            rows.append(
+                {
+                    "metric": metric,
+                    "n_surface": surface.n,
+                    "n_onion": onion.n,
+                    "mean_difference_in_differences": float(mean[index]),
+                    "cluster_level": level,
+                    "surface_cluster_count": len(surface.clusters),
+                    "onion_cluster_count": len(onion.clusters),
+                    "surface_effective_cluster_count": surface.effective_clusters(),
+                    "onion_effective_cluster_count": onion.effective_clusters(),
+                    "surface_max_cluster_size": surface.max_cluster(),
+                    "onion_max_cluster_size": onion.max_cluster(),
+                    "surface_cluster_variance": (
+                        float(var_surface[index]) if np.isfinite(var_surface[index]) else None
+                    ),
+                    "onion_cluster_variance": (
+                        float(var_onion[index]) if np.isfinite(var_onion[index]) else None
+                    ),
+                    "independent_cluster_standard_error": se,
+                    "estimable": bool(se is not None and math.isfinite(se) and se > 0.0),
+                    "cluster_counts_ge_20": (
+                        len(surface.clusters) >= 20 and len(onion.clusters) >= 20
+                    ),
+                }
+            )
+        _apply_familywise(rows)
+        return rows
 
+    host_rows = summarize("host")
+    source_rows = summarize("source")
     result = {
         "contrast": "(onion_natural-onion_synthetic)-(surface_natural-surface_synthetic)",
         "core_metrics": list(CORE_METRICS),
@@ -342,19 +282,17 @@ def analyze_difference_in_differences(config: dict[str, Any]) -> dict[str, Any]:
         "alpha": DID_ALPHA,
         "complete_matches": complete_matches,
         "invalid_matches": invalid_matches,
-        "host_two_way_cgm": host_rows,
-        "source_file_two_way_cgm": source_rows,
+        "host_independent_cluster_difference": host_rows,
+        "source_file_independent_cluster_difference": source_rows,
         "method": (
-            "Match-level difference-in-differences after averaging all QR masks. Two-way CR1/CGM "
-            "variance uses Surface cluster + Onion cluster - Surface×Onion intersection cluster. "
-            "Negative finite-sample CGM variance is flagged and is not claim-eligible. Strict "
-            "confirmatory pass additionally requires >=20 clusters on both host dimensions, Holm "
-            "FWER p<=0.05 and the fixed-four-cell Bonferroni simultaneous interval to exclude zero."
+            "Match-level natural-minus-null effects after averaging QR masks. Exact cross-corpus "
+            "byte-length/QR matching is used for balance only. DiD uncertainty is pairing-invariant: "
+            "the one-way CR1 variance of the Onion mean and the one-way CR1 variance of the Surface "
+            "mean are added, separately for natural-host and source-file clustering."
         ),
         "interpretation": (
-            "This directly tests whether natural-vs-declared-null QR geometry differs between the "
-            "two corpora under exact cross-corpus byte-length matching. It is a structural "
-            "difference-in-differences, not a semantic or Chomskyan-grammar measurement by itself."
+            "This tests whether natural-vs-declared-null QR geometry differs between corpora on "
+            "their exact shared support. It is structural, not a semantic or Chomskyan claim."
         ),
     }
     output_path = output_dir / "did_analysis.json"
