@@ -15,7 +15,7 @@ def test_degenerate_exact_bit_multiset_has_zero_spatial_residual():
     assert np.allclose(null_sd, 0.0)
 
 
-def test_identical_payload_null_has_zero_placement_contrast(tmp_path: Path):
+def test_identical_payload_null_has_exact_zero_placement_contrast(tmp_path: Path):
     output = tmp_path / "out"
     output.mkdir()
     payload_path = output / "payloads.jsonl.gz"
@@ -64,11 +64,8 @@ def test_identical_payload_null_has_zero_placement_contrast(tmp_path: Path):
     assert result["complete_matches"] == 1
     assert result["invalid_matches"] == 0
     assert result["permutations_per_payload_region"] == 4
+    assert result["common_random_numbers_within_natural_synthetic_pair"] is True
     for region in ("data_codeword", "rs_ecc"):
         for contrast in result["results"][region].values():
-            # The two identical payloads use independent Monte-Carlo placement
-            # draws, so finite-K residuals need not be exactly equal. Their exact
-            # observed bit content is still identical; zero is recovered in the
-            # degenerate exact-multiset test above, while this test exercises the
-            # full pipeline and metadata/cluster path.
             assert all(row["n_matches"] == 1 for row in contrast["host_clustered"])
+            assert all(row["mean_difference"] == 0.0 for row in contrast["host_clustered"])
