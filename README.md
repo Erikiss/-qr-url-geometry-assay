@@ -1,43 +1,85 @@
 # QR URL Geometry Assay
 
-A reproducible, CPU-only experiment for separating QR geometry caused by URL
-structure from geometry caused by payload semantics.
+A reproducible, CPU-only stage-1 assay for separating QR geometry caused by natural URL byte/sequence structure from geometry expected under declared structural nulls.
 
-The repository implements the complete three-corpus design:
+> **Scope:** this repository does not measure semantics, attention heads, experts, or neural carrier rotation. A QR encoder sees bytes. Stage 1 locks down the stimulus family and its geometric nulls before a later model/checkpoint assay is attached.
 
-1. **Natural surface URLs** — streamed from DomainsProject or compatible files.
-2. **Natural onion URLs** — merged and deduplicated across any number of current
-   and historical crawl exports.
-3. **Grammar-matched synthetic URLs** — random tokens with the same delimiters,
-   character classes, UTF-8 byte length, and surface/onion grammar.
+## Corpus design
 
-The synthetic family has a surface-matched and an onion-matched arm, so every
-matched unit contains four payload classes:
+Each `match_id` contains four byte-length-matched payloads:
 
-`surface_natural`, `onion_natural`, `surface_synthetic`, `onion_synthetic`.
+1. `surface_natural`
+2. `onion_natural`
+3. `surface_synthetic`
+4. `onion_synthetic`
+
+The confirmatory full run uses **origin vs origin** and strips schemes before matching, removing the arbitrary `https://` versus `http://` prefix difference. The path/query experiment uses **URL vs URL**. Mixed granularity is exploratory only.
+
+Onion sources are unions of pinned current/historical crawl exports. “All onions” means every unique onion unit in the declared snapshots, not an enumerable ground truth for Tor.
+
+## Structural-null ladder
+
+Run the same design under progressively weaker nulls:
+
+```text
+token_shuffle   preserves token character multisets where meaningful
+class_permute   preserves global ASCII unigram counts within character classes
+grammar_random  preserves delimiters and lower/upper/digit positions only
+```
+
+For a v3 onion hostname, all modes substitute a fresh checksum-valid v3 onion address; the cryptographic host is not treated as a natural-language token. Path/query material still follows the selected null.
+
+Select a null without editing YAML:
+
+```bash
+qr-assay run --config configs/standard.yml --set sampling.synthetic_mode=token_shuffle
+qr-assay run --config configs/standard.yml --set sampling.synthetic_mode=class_permute
+qr-assay run --config configs/standard.yml --set sampling.synthetic_mode=grammar_random
+```
+
+A difference is therefore a **lexical/sequence-structure effect relative to the declared null**, not a semantic effect.
+
+## Mask-factorial QR design
+
+Every payload is encoded under every configured QR mask. With the default masks `0..7`, mask is a within-payload nuisance factor rather than a between-payload assignment.
+
+The primary transformed calibration is:
+
+```text
+4 rotations × 2 polarities
+```
+
+so each payload produces `8 masks × 8 transform states = 64` feature rows in the core design. Paired inference first averages the primary 0°/normal geometry over masks and then contributes **one observation per match_id**. Masks and deterministic transforms are not counted as independent replicates.
+
+The extended design uses the exact eight elements of the square symmetry group `D4` rather than a redundant rotation × reflection product.
+
+Bit inversion is the exact involution `Q' = 1 - Q`; it is not geometric circle inversion.
 
 ## What is measured
 
-The preregistered core is a `payload class × 4 rotations × 2 polarities`
-factorial design. It records three families of geometric observables:
+Every QR is measured in **two regions**:
 
-1. **Radial movement** — radial moments and covariance trace.
-2. **Translation** — the normalized black-module centroid.
-3. **Rotation/cyclicity** — principal-axis angle, anisotropy, and the complete
-   0°/90°/180°/270° orbit.
+- **full matrix** — includes finder, timing, alignment, format/version and data/ECC modules;
+- **data/ECC region only** — masks out the fixed QR function patterns.
 
-Horizontal, vertical, diagonal, and anti-diagonal reflection plus integer
-nearest-neighbor scaling are implemented in `configs/extended.yml`.
+The **data/ECC region is primary**. Whole-matrix geometry is retained as a sensitivity/control analysis, because fixed finder and timing patterns can dominate simple moments without being payload-specific. The data/ECC mask is reconstructed from the same `qrcode` encoder's pre-data-map function-pattern setup and checked in CI.
 
-Every matched unit is controlled on UTF-8 byte length, QR version,
-error-correction level, forced byte-mode encoding, and mask pattern. The
-analysis then intersects black-module-density bins across all four classes.
-Bit inversion is the exact involution `Q' = 1 - Q`; it is not geometric
-inversion.
+The primary stage-1 feature families are therefore:
+
+- **radial/stretching-like:** `data_radial_mean`, `data_radial_std`, `data_cov_trace`;
+- **translation-like:** normalized data/ECC centroid and `data_centroid_radius`;
+- **axial orientation:** `data_anisotropy` plus `data_orientation_cos2` / `data_orientation_sin2`;
+- **texture controls:** `data_transition_h` / `data_transition_v`.
+
+Raw `principal_angle_deg` values are descriptive only because principal-axis direction is axial modulo 180°. Inferential comparisons use the doubled-angle embedding.
+
+This version separates fixed QR function patterns from the data/ECC region, but **does not yet split payload codewords from Reed–Solomon ECC codewords**. That becomes a next refinement only if an effect survives the current controls.
+
+The 0°→90°→180°→270° orbit is **equivariance calibration**. Because the code explicitly rotates the matrix, cyclicity there is true by construction and is not evidence for cyclic dynamics in a transformer.
 
 ## Five-minute smoke test
 
-Python 3.11+ is required.
+Python 3.11+:
 
 ```bash
 python -m venv .venv
@@ -47,141 +89,89 @@ qr-assay demo-data --output-dir data/raw/demo --pairs 250
 qr-assay run --config configs/smoke.yml
 ```
 
-The demo inputs are synthetic fixtures for testing the pipeline. They must not
-be used as scientific data.
+Demo inputs are safe synthetic fixtures and must not be used as scientific data.
 
 ## Real data
 
-Place one or more files/directories under:
+Place source files under:
 
 ```text
 data/raw/surface/
 data/raw/onion/
 ```
 
-Accepted inputs include plain text, CSV/JSONL-like text, `.gz`, `.xz`, `.bz2`,
-and `.zip`. Surface lines may be domains or URLs. The onion extractor finds v2
-and v3 `.onion` URLs inside arbitrary crawl-export lines. No page content is
-used.
+Accepted inputs include plain text, CSV/JSONL-like text, `.gz`, `.xz`, `.bz2`, and `.zip`. Surface lines may be domains or URLs. The onion extractor finds v2/v3 `.onion` URLs inside arbitrary crawl-export lines. No onion page content is fetched.
 
-DomainsProject publishes multi-billion-domain lists; its documented unpacked
-format is one domain per line. Stream a subset or the full files directly into
-`data/raw/surface/` rather than loading them into RAM.
+DomainsProject is the intended large surface source. Add every licensed historical/current onion crawl export to `data/raw/onion/`; the pipeline normalizes and deduplicates before sampling.
 
 ```bash
-qr-assay acquire \
-  --manifest configs/sources.example.yml \
-  --output-dir data/raw/onion
-
+qr-assay acquire --manifest configs/sources.example.yml --output-dir data/raw/onion
 qr-assay run --config configs/standard.yml
 ```
 
-Add every historical/current onion crawl export to `data/raw/onion/`. The
-normalizer deduplicates them before reservoir sampling. The code deliberately
-does **not** connect to Tor, probe services, or download onion page content.
+See `docs/data-sources.md` and `docs/source-catalog.md` for provenance rules and the precise meaning of “all”.
 
-`sources.onion.granularity` selects the research unit. `url` retains observed
-paths and queries; `origin` deduplicates by natural onion host and canonicalizes
-it to `http://<host>.onion/`. The exhaustive config uses `origin`, so “all
-natural onions” means every unique onion site in the pinned source snapshots,
-not repeated crawl paths.
+## Confirmatory vs exploratory runs
 
-## RunPod CPU Pod (on demand)
+`configs/full.yml` is the cleanest confirmatory corpus comparison:
 
-No GPU is required. On a CPU Pod with Docker:
-
-```bash
-git clone YOUR_REPOSITORY_URL qr-url-geometry-assay
-cd qr-url-geometry-assay
-docker build -t qr-assay .
-
-docker run --rm \
-  -v "$PWD/data:/app/data" \
-  -v "$PWD/results:/app/results" \
-  qr-assay run --config configs/standard.yml
+```text
+surface granularity = origin
+onion granularity   = origin
+scheme policy       = strip
+masks               = all 8
+primary region      = data/ECC modules only
 ```
 
-Use a persistent/network volume only for the raw corpora and `results/`. The
-container itself can be ephemeral. `execution.workers: 0` uses all logical
-CPUs visible in the container.
+`configs/standard.yml` retains paths/queries in both corpora and is more vulnerable to host/crawl dependence. Publication inference for URL-granularity data should use host/crawl-clustered resampling; the built-in normal-approximation p-values are secondary diagnostics only.
 
-Before paying for a large machine, benchmark the exact CPU flavor:
+## Compute warning after hardening
+
+Mask factorialization increases the row count by 8× relative to the original v0.1 design.
+
+| profile | matches | payloads | base QRs (8 masks) | core transform rows |
+|---|---:|---:|---:|---:|
+| smoke | 100 | 400 | 3,200 | 25,600 |
+| standard | 100,000 | 400,000 | 3.2 million | 25.6 million |
+| full target | 1.5 million | 6 million | 48 million | 384 million |
+
+Do **not** launch the full target from the old v0.1 timing estimates. Benchmark the exact machine and run the falsification battery first. At full scale, feature I/O can dominate QR arithmetic.
 
 ```bash
 qr-assay benchmark --count 10000 --workers 0
-```
-
-The command reports measured base-QR throughput and a projection for one
-million base QR codes. Final wall time also includes source scanning and two
-streaming analysis passes.
-
-### Planning ranges
-
-| profile | matched units | base QR codes | transform rows | suggested CPU | planning time |
-|---|---:|---:|---:|---:|---:|
-| smoke | 100 | 400 | 3,200 | laptop | under 2 min |
-| standard | 100,000 | 400,000 | 3.2 million | 16–32 vCPU | roughly 10–45 min |
-| exhaustive core | 1.5 million | 6 million | 48 million | 32–64 vCPU | roughly 1–3 h |
-
-These are deliberately broad until `qr-assay benchmark` has run on the chosen
-CPU. On the development runner (9 logical CPUs), a complete 10,000-match run
-produced 320,000 rows in 27.5 seconds; raw QR generation projected one million
-base codes in 4.9 minutes. Real source scanning and compressed JSONL I/O make
-the larger planning ranges more appropriate. The exhaustive run is usually
-limited more by I/O than by QR arithmetic. Gzip level 1 reduced a measured
-308 MB feature file to 47 MB, putting a 1.5-million-match core run in the
-single-digit-gigabyte range for similar payload lengths.
-
-## Commands
-
-```text
-qr-assay prepare    normalize, deduplicate, pair, and synthesize payloads
-qr-assay generate   generate QR matrices and stream geometric features
-qr-assay analyze    create controlled and density-balanced summaries
-qr-assay run        execute all three stages and write a run manifest
-qr-assay benchmark  measure the current CPU
-qr-assay acquire    fetch declared clearnet source files with SHA-256 checks
-```
-
-Any YAML value can be overridden without editing the file:
-
-```bash
-qr-assay run --config configs/standard.yml \
-  --set sampling.target_pairs=250000 \
-  --set execution.workers=48
 ```
 
 ## Outputs
 
 Each run directory contains:
 
-- `payloads.jsonl.gz` — matched payload metadata and provenance;
-- `features.jsonl.gz` — one row per QR transform;
-- `analysis.json` — raw and density-balanced group summaries;
+- `payloads.jsonl.gz` — matched payload metadata/provenance;
+- `features.jsonl.gz` — one row per QR mask × transform with full-matrix and data/ECC-region features;
+- `analysis.json` — unbalanced and density-balanced summaries;
 - `report.md` — concise human-readable result;
-- `run_manifest.json` — full config, environment, hashes, timings, and QC;
+- `run_manifest.json` — full config, environment, hashes, timings and QC;
 - `examples/` — a few PNGs for visual inspection.
 
-Raw corpora and generated results are gitignored. Publish source manifests,
-checksums, configuration, code commit, and the run manifest—not live crawl
-content—unless the upstream dataset license explicitly permits redistribution.
+Raw corpora and generated results are gitignored. Publish source manifests, checksums, configuration, code commit and run manifest—not live crawl content—unless upstream licensing explicitly permits redistribution.
 
 ## Reproducibility contract
 
-- RNG seed is fixed in each config.
-- Sampling is reservoir-based and bounded in memory.
-- All four classes share match ID, byte length, QR version, ECC, and mask.
-- QR byte mode is forced to avoid library-dependent segment optimization.
-- Every feature file is SHA-256 hashed.
-- Every declared raw source file is inventoried by path, byte size, mtime, and
-  SHA-256 (`hash_inputs: false` is available only for exploratory scans).
-- A run fails QC if inversion density or matched controls disagree.
-- Natural-vs-synthetic and onion-vs-surface effects are computed within
-  `match_id`, with 95% intervals, standardized paired effects, and Holm-adjusted
-  normal-approximation p-values. Effect sizes and intervals remain primary.
+- fixed RNG seed in every config;
+- exact source inventory and SHA-256 when enabled;
+- bounded-memory reservoir sampling;
+- symmetric surface/onion granularity controls;
+- explicit scheme policy;
+- forced QR byte mode;
+- every payload under every configured mask;
+- fixed QR function patterns separated from data/ECC-region geometry;
+- feature-file SHA-256;
+- whole-matrix and data/ECC inversion/matched-mask QC gates;
+- paired effects computed once per `match_id` after mask averaging;
+- axial orientation represented with `cos(2θ)` and `sin(2θ)`;
+- effect sizes and intervals are primary; p-values are secondary.
 
-See [docs/protocol.md](docs/protocol.md) and
-[docs/data-sources.md](docs/data-sources.md) for the preregistered comparisons
-and provenance rules. [docs/source-catalog.md](docs/source-catalog.md) separates
-automatically reproducible current lists from historical research corpora that
-must be requested from their authors.
+## Before a million-scale run
+
+Run small planted worlds first. The assay should stay null when both corpora come from the same process and recover deliberately planted unigram, ordering, mask and orientation differences. It should also ignore changes confined to fixed QR function modules when the primary data/ECC metrics are used. The required falsification battery is specified in `docs/protocol.md`.
+
+Only after stage 1 survives those checks should a stage-2 model assay attach continuous head/expert carrier vectors and test actual neural translation, stretching, rotation, hysteresis or cyclicity.

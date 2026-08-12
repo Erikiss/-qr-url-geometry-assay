@@ -5,40 +5,51 @@ sources:
     paths: [data/raw/surface]
     scan_limit: null
     deduplicate: false
+    granularity: origin
+    # origin is deduplicated by protocol even when the upstream source claims
+    # uniqueness. At DomainsProject scale the exact seen-set must be disk-backed.
+    dedup_backend: sqlite
   onion:
     paths: [data/raw/onion]
     scan_limit: null
     deduplicate: true
-    # Site-level exhaustive run: every natural onion host counts once, even if
-    # historical crawls contain many paths from that host.
     granularity: origin
+    versions: [3]
+    dedup_backend: sqlite
 
 sampling:
-  # Raise this to the number of deduplicated natural onion URLs if an exhaustive
-  # matched run is wanted. The pipeline stops cleanly at the available overlap.
   target_pairs: 1500000
-  # In origin mode almost every v3 onion URL is 70 bytes, so this bucket must
-  # be as large as the requested exhaustive match count.
   reservoir_per_length: 1500000
   min_bytes: 16
   max_bytes: 1024
+  # Remove the arbitrary https-vs-http prefix before matching/encoding.
+  scheme_policy: strip
+  # Preserve the shared empirical byte-length support rather than weighting rare
+  # lengths equally with common ones.
+  length_weighting: overlap
+  # Weakest null in the ladder; repeat with token_shuffle/class_permute configs
+  # before interpreting a natural-vs-synthetic effect structurally.
+  synthetic_mode: grammar_random
 
 qr:
   error_correction: M
+  # Every payload is encoded under every QR mask. Mask is a within-payload factor.
   masks: [0, 1, 2, 3, 4, 5, 6, 7]
   border: 0
 
 transforms:
-  rotations: [0, 90, 180, 270]
-  inversions: [false, true]
-  # The preregistered full run is the primary 2 x 4 polarity/rotation design.
-  # Reflection and scale are available in configs/extended.yml.
+  # The million-scale corpus run stores only the primary state. Rotations and
+  # polarity flips are deterministic matrix operations and belong in the much
+  # smaller equivariance calibration, not in redundant corpus-scale rows.
+  group: factorial
+  rotations: [0]
+  inversions: [false]
   reflections: [none]
   scales: [1]
 
 execution:
   workers: 0
-  chunk_size: 512
+  chunk_size: 256
 
 outputs:
   directory: results/full

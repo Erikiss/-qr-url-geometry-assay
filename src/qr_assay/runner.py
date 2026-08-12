@@ -6,14 +6,23 @@ import platform
 import subprocess
 import time
 from datetime import UTC, datetime
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
 from . import __version__
 from .analysis import analyze_features, write_report
+from .bitstream import analyze_bitstream_baseline
+from .cluster import analyze_clustered_core
+from .codeword import analyze_codeword_regions
 from .config import config_sha256
+from .confirmatory_report import write_confirmatory_report
+from .did import analyze_difference_in_differences
+from .familywise import analyze_familywise_core
 from .generate import generate_features
+from .null_qc import analyze_null_qc
 from .sampling import prepare_payloads
+from .spatial_null import analyze_spatial_null
 
 
 def _git_commit() -> str | None:
@@ -28,13 +37,55 @@ def _git_commit() -> str | None:
         return None
 
 
+def _package_versions() -> dict[str, str | None]:
+    packages = ("qr-url-geometry-assay", "qrcode", "numpy", "Pillow", "PyYAML")
+    result: dict[str, str | None] = {}
+    for package in packages:
+        try:
+            result[package] = version(package)
+        except PackageNotFoundError:
+            result[package] = None
+    return result
+
+
 def run_all(config: dict[str, Any]) -> dict[str, Any]:
     started = datetime.now(UTC)
     start = time.perf_counter()
     preparation = prepare_payloads(config)
+    null_qc = analyze_null_qc(config)
     generation = generate_features(config)
     analysis = analyze_features(config)
-    report_path = write_report(config, preparation, generation, analysis)
+    clustered = analyze_clustered_core(config)
+    familywise = analyze_familywise_core(config, clustered)
+    did = analyze_difference_in_differences(config)
+    codeword = (
+        analyze_codeword_regions(config)
+        if bool(config.get("analysis", {}).get("codeword_diagnostics", False))
+        else None
+    )
+    bitstream = (
+        analyze_bitstream_baseline(config)
+        if bool(config.get("analysis", {}).get("bitstream_diagnostics", False))
+        else None
+    )
+    spatial_null = (
+        analyze_spatial_null(config)
+        if bool(config.get("analysis", {}).get("spatial_null_diagnostics", False))
+        else None
+    )
+    descriptive_report_path = write_report(config, preparation, generation, analysis)
+    confirmatory_report_path = write_confirmatory_report(
+        config,
+        preparation,
+        null_qc,
+        clustered,
+        familywise,
+        did,
+        descriptive_report=descriptive_report_path,
+        codeword=codeword,
+        bitstream=bitstream,
+        spatial_null=spatial_null,
+    )
     output_dir = Path(config["outputs"]["directory"])
     manifest = {
         "assay_version": __version__,
@@ -48,8 +99,15 @@ def run_all(config: dict[str, Any]) -> dict[str, Any]:
             "platform": platform.platform(),
             "logical_cpus": os.cpu_count(),
             "git_commit": _git_commit(),
+            "packages": _package_versions(),
         },
         "preparation": preparation,
+        "null_qc": {
+            "output": null_qc["output"],
+            "synthetic_mode": null_qc["synthetic_mode"],
+            "passed_hard_invariants": null_qc["passed_hard_invariants"],
+            "corpora": null_qc["corpora"],
+        },
         "generation": generation,
         "analysis_summary": {
             "rows": analysis["rows"],
@@ -57,7 +115,60 @@ def run_all(config: dict[str, Any]) -> dict[str, Any]:
             "quality_control": analysis["quality_control"],
             "features_sha256": analysis["features_sha256"],
         },
-        "report": str(report_path),
+        "cluster_analysis": {
+            "output": clustered["output"],
+            "core_metrics": clustered["core_metrics"],
+            "complete_matches_seen": clustered["complete_matches_seen"],
+            "invalid_matches": clustered["invalid_matches"],
+            "method": clustered["method"],
+        },
+        "familywise_analysis": {
+            "output": familywise["output"],
+            "alpha": familywise["alpha"],
+            "predeclared_family_size": familywise["predeclared_family_size"],
+        },
+        "did_analysis": {
+            "output": did["output"],
+            "complete_matches": did["complete_matches"],
+            "invalid_matches": did["invalid_matches"],
+            "family_size": did["family_size"],
+            "method": did["method"],
+        },
+        "codeword_analysis": (
+            {
+                "output": codeword["output"],
+                "complete_matches": codeword["complete_matches"],
+                "invalid_matches": codeword["invalid_matches"],
+                "qrs_encoded": codeword["qrs_encoded"],
+            }
+            if codeword is not None
+            else None
+        ),
+        "bitstream_analysis": (
+            {
+                "output": bitstream["output"],
+                "complete_matches": bitstream["complete_matches"],
+                "invalid_matches": bitstream["invalid_matches"],
+                "streams": bitstream["streams"],
+            }
+            if bitstream is not None
+            else None
+        ),
+        "spatial_null_analysis": (
+            {
+                "output": spatial_null["output"],
+                "complete_matches": spatial_null["complete_matches"],
+                "invalid_matches": spatial_null["invalid_matches"],
+                "permutations_per_payload_region": spatial_null["permutations_per_payload_region"],
+                "common_random_numbers": spatial_null[
+                    "common_random_numbers_within_natural_synthetic_pair"
+                ],
+            }
+            if spatial_null is not None
+            else None
+        ),
+        "report": str(confirmatory_report_path),
+        "descriptive_report": str(descriptive_report_path),
     }
     manifest_path = output_dir / config["outputs"]["manifest_file"]
     with manifest_path.open("w", encoding="utf-8") as handle:

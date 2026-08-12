@@ -11,11 +11,9 @@ sources:
     scan_limit: null
     deduplicate: true
     granularity: origin
-    versions: [3]
 
 sampling:
-  # D4/polarity rows are deterministic equivariance calibration, so they do not
-  # need the corpus-scale sample used for confirmatory lexical inference.
+  # Deterministic transform identities do not need the million-scale corpus.
   target_pairs: 10000
   reservoir_per_length: 20000
   min_bytes: 16
@@ -29,13 +27,10 @@ qr:
   border: 0
 
 transforms:
-  # Exactly the 8 unique elements of the square symmetry group D4. Bit inversion
-  # is crossed as a separate involution. Pixel scaling is deferred to the neural
-  # image/model assay; nearest-neighbour matrix duplication is tautological here.
-  group: d4
-  rotations: [0]
-  reflections: [none]
+  group: factorial
+  rotations: [0, 90, 180, 270]
   inversions: [false, true]
+  reflections: [none]
   scales: [1]
 
 execution:
@@ -43,9 +38,9 @@ execution:
   chunk_size: 128
 
 outputs:
-  directory: results/extended
+  directory: results/equivariance
   store_payload_text: true
-  png_examples_per_class: 2
+  png_examples_per_class: 3
 
 analysis:
   density_bin_width: 0.005

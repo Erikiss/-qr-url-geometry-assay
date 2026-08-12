@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 import string
@@ -18,6 +19,7 @@ from .generate import _process_chunk, generate_features
 from .runner import run_all
 from .sampling import prepare_payloads
 from .sources import acquire_manifest
+from .synthetic import synthetic_onion_label
 
 
 def _common_config(parser: argparse.ArgumentParser) -> None:
@@ -36,25 +38,25 @@ def _print(value: Any) -> None:
 
 
 def _demo_payloads(output_dir: Path, pairs: int, seed: int) -> dict[str, Any]:
+    """Create safe fixtures whose *scheme-stripped* payload lengths match."""
     output_dir.mkdir(parents=True, exist_ok=True)
     surface_path = output_dir / "surface.txt"
     onion_path = output_dir / "onion.txt"
     rng = random.Random(seed)
-    base32 = "abcdefghijklmnopqrstuvwxyz234567"
     surface_rows: list[str] = []
     onion_rows: list[str] = []
     for index in range(pairs):
         path = f"/p/{index:06d}" if index % 3 else "/"
-        onion_host = "".join(rng.choice(base32) for _ in range(56)) + ".onion"
+        onion_host = synthetic_onion_label(56, rng) + ".onion"
         onion = f"http://{onion_host}{path}"
-        target_bytes = len(onion.encode("utf-8"))
-        fixed = len(("https://" + ".invalid" + path).encode("utf-8"))
-        label_length = target_bytes - fixed
+        onion_stripped_bytes = len((onion_host + path).encode("utf-8"))
+        fixed = len((".invalid" + path).encode("utf-8"))
+        label_length = onion_stripped_bytes - fixed
         label = "".join(
             rng.choice(string.ascii_lowercase + string.digits) for _ in range(label_length)
         )
         surface = f"https://{label}.invalid{path}"
-        assert len(surface.encode("utf-8")) == target_bytes
+        assert len(surface.split("://", 1)[1].encode("utf-8")) == onion_stripped_bytes
         surface_rows.append(surface)
         onion_rows.append(onion)
     surface_path.write_text("\n".join(surface_rows) + "\n", encoding="utf-8")
@@ -69,20 +71,19 @@ def _demo_payloads(output_dir: Path, pairs: int, seed: int) -> dict[str, Any]:
 
 def _benchmark(count: int, workers: int) -> dict[str, Any]:
     rng = random.Random(267010)
-    base32 = "abcdefghijklmnopqrstuvwxyz234567"
     records = []
     for index in range(count):
-        payload = "http://" + "".join(rng.choice(base32) for _ in range(56)) + ".onion/"
+        payload = synthetic_onion_label(56, rng) + ".onion/"
         records.append(
             {
                 "match_id": index,
                 "payload_class": "onion_natural",
                 "grammar": "onion",
                 "synthetic": False,
+                "synthetic_mode": None,
                 "payload": payload,
-                "payload_sha256": __import__("hashlib").sha256(payload.encode()).hexdigest(),
+                "payload_sha256": hashlib.sha256(payload.encode()).hexdigest(),
                 "byte_length": len(payload.encode()),
-                "mask": index % 8,
             }
         )
     config = __import__("copy").deepcopy(DEFAULTS)
@@ -100,20 +101,24 @@ def _benchmark(count: int, workers: int) -> dict[str, Any]:
             for result in executor.map(_process_chunk, ((chunk, config) for chunk in chunks)):
                 rows += len(result)
     elapsed = time.perf_counter() - start
+    masks = len(config["qr"]["masks"])
+    base_qr_codes = count * masks
     return {
-        "base_qr_codes": count,
+        "payloads": count,
+        "masks_per_payload": masks,
+        "base_qr_codes": base_qr_codes,
         "transform_rows": rows,
         "workers": workers,
         "elapsed_seconds": elapsed,
-        "base_qr_per_second": count / elapsed,
-        "estimated_seconds_for_1m_base_qr": 1_000_000 * elapsed / count,
+        "base_qr_per_second": base_qr_codes / elapsed,
+        "estimated_seconds_for_1m_base_qr": 1_000_000 * elapsed / base_qr_codes,
     }
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="qr-assay",
-        description="CPU-only QR geometry assay for natural and synthetic URL corpora.",
+        description="CPU-only QR geometry assay for natural and structural-null URL corpora.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
     prepare = sub.add_parser(

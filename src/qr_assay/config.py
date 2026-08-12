@@ -16,6 +16,7 @@ DEFAULTS: dict[str, Any] = {
             "paths": [],
             "scan_limit": None,
             "deduplicate": False,
+            "granularity": "url",
             "hash_inputs": True,
         },
         "onion": {
@@ -24,6 +25,9 @@ DEFAULTS: dict[str, Any] = {
             "deduplicate": True,
             "granularity": "url",
             "hash_inputs": True,
+            # v2 Onion services are a historical format with a radically different
+            # hostname length. Do not mix them into the confirmatory v3 population.
+            "versions": [3],
         },
     },
     "sampling": {
@@ -31,6 +35,11 @@ DEFAULTS: dict[str, Any] = {
         "reservoir_per_length": 5_000,
         "min_bytes": 16,
         "max_bytes": 512,
+        "scheme_policy": "strip",
+        "synthetic_mode": "grammar_random",
+        # Weight matched lengths by their shared empirical support rather than
+        # giving rare and common byte lengths equal influence.
+        "length_weighting": "overlap",
     },
     "qr": {
         "error_correction": "M",
@@ -38,6 +47,7 @@ DEFAULTS: dict[str, Any] = {
         "border": 0,
     },
     "transforms": {
+        "group": "factorial",
         "rotations": [0, 90, 180, 270],
         "inversions": [False, True],
         "reflections": ["none"],
@@ -119,6 +129,34 @@ def validate(config: dict[str, Any]) -> None:
         raise ConfigError("sampling.target_pairs must be positive")
     if int(config["sampling"]["reservoir_per_length"]) < 1:
         raise ConfigError("sampling.reservoir_per_length must be positive")
+    if config["sampling"].get("scheme_policy", "strip") not in {"strip", "https", "preserve"}:
+        raise ConfigError("sampling.scheme_policy must be strip, https, or preserve")
+    if config["sampling"].get("synthetic_mode", "grammar_random") not in {
+        "token_shuffle",
+        "class_permute",
+        "grammar_random",
+    }:
+        raise ConfigError(
+            "sampling.synthetic_mode must be token_shuffle, class_permute, or grammar_random"
+        )
+    if config["sampling"].get("length_weighting", "overlap") not in {"overlap", "equal_length"}:
+        raise ConfigError("sampling.length_weighting must be overlap or equal_length")
+
+    valid_granularities = {"url", "origin", "path_query"}
+    for corpus in ("surface", "onion"):
+        granularity = config["sources"][corpus].get("granularity", "url")
+        if granularity not in valid_granularities:
+            raise ConfigError(f"sources.{corpus}.granularity must be url, origin, or path_query")
+
+    onion_versions = [int(value) for value in config["sources"]["onion"].get("versions", [3])]
+    if not onion_versions or not set(onion_versions) <= {2, 3}:
+        raise ConfigError("sources.onion.versions must be a non-empty subset of [2, 3]")
+    if len(set(onion_versions)) != len(onion_versions):
+        raise ConfigError("sources.onion.versions must not contain duplicates")
+
+    group = str(config["transforms"].get("group", "factorial"))
+    if group not in {"factorial", "d4"}:
+        raise ConfigError("transforms.group must be factorial or d4")
     rotations = config["transforms"]["rotations"]
     if not rotations or any(int(x) % 90 for x in rotations):
         raise ConfigError("transforms.rotations must contain multiples of 90")
@@ -128,19 +166,23 @@ def validate(config: dict[str, Any]) -> None:
         raise ConfigError(f"Unknown reflection: {sorted(reflections - valid_reflections)}")
     if any(int(scale) < 1 for scale in config["transforms"]["scales"]):
         raise ConfigError("transforms.scales must be positive integers")
-    if 0 not in [int(x) for x in rotations]:
-        raise ConfigError("transforms.rotations must include 0 for the controlled baseline")
-    if "none" not in reflections or 1 not in [int(x) for x in config["transforms"]["scales"]]:
-        raise ConfigError("transforms must include reflection=none and scale=1")
+    if group == "factorial":
+        if 0 not in [int(x) for x in rotations]:
+            raise ConfigError("transforms.rotations must include 0 for the controlled baseline")
+        if "none" not in reflections:
+            raise ConfigError("factorial transforms must include reflection=none")
+    if 1 not in [int(x) for x in config["transforms"]["scales"]]:
+        raise ConfigError("transforms.scales must include 1")
     if False not in [bool(x) for x in config["transforms"]["inversions"]]:
         raise ConfigError("transforms.inversions must include false")
+
     masks = [int(x) for x in config["qr"]["masks"]]
     if not masks or any(x < 0 or x > 7 for x in masks):
         raise ConfigError("qr.masks must be a non-empty subset of 0..7")
+    if len(set(masks)) != len(masks):
+        raise ConfigError("qr.masks must not contain duplicates")
     if str(config["qr"]["error_correction"]).upper() not in {"L", "M", "Q", "H"}:
         raise ConfigError("qr.error_correction must be L, M, Q, or H")
-    if config["sources"]["onion"].get("granularity", "url") not in {"url", "origin"}:
-        raise ConfigError("sources.onion.granularity must be url or origin")
 
 
 def load_config(path: str | os.PathLike[str], overrides: list[str] | None = None) -> dict[str, Any]:

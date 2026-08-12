@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "qr-url-geometry-assay"
-version = "0.1.0"
-description = "CPU-only controlled QR geometry assay for natural surface URLs, natural onion URLs, and grammar-matched synthetic controls."
+version = "0.2.0"
+description = "CPU-only controlled QR geometry assay for natural surface/onion URL structure and explicit structural nulls."
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
@@ -14,7 +14,8 @@ dependencies = [
   "numpy>=1.26,<3",
   "Pillow>=10.0,<12",
   "PyYAML>=6.0,<7",
-  "qrcode>=8.0,<9",
+  # QR matrices and the data-region mask both depend on this implementation.
+  "qrcode==8.2",
 ]
 
 [project.optional-dependencies]
