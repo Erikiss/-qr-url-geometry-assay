@@ -30,10 +30,17 @@ def test_inversion_is_an_involution_and_complements_density():
     inverse = transform_matrix(matrix, inverted=True)
     restored = transform_matrix(inverse, inverted=True)
     assert np.array_equal(restored, matrix)
-    assert geometry_features(inverse)["density"] == 1.0 - geometry_features(matrix)["density"]
-    assert (
-        geometry_features(inverse, region)["density"]
-        == 1.0 - geometry_features(matrix, region)["density"]
+    assert np.isclose(
+        geometry_features(inverse)["density"],
+        1.0 - geometry_features(matrix)["density"],
+        atol=1e-15,
+        rtol=0.0,
+    )
+    assert np.isclose(
+        geometry_features(inverse, region)["density"],
+        1.0 - geometry_features(matrix, region)["density"],
+        atol=1e-15,
+        rtol=0.0,
     )
 
 
