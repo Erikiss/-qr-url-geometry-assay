@@ -10,9 +10,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import yaml
 
-from .cluster import CONFIRMATORY_CONTRASTS, CORE_METRICS, ClusterAccumulator
+from .cluster import CONFIRMATORY_CONTRASTS, ClusterAccumulator
 from .codeword import REGION_FEATURE_KEYS
 from .config import load_config
 from .fileio import open_text
@@ -28,9 +27,7 @@ def _batch_seed(
     region: str,
     mask: int,
 ) -> int:
-    material = f"{base_seed}:mc-batch:{batch}:{match_id}:{pair_group}:{region}:{mask}".encode(
-        "utf-8"
-    )
+    material = f"{base_seed}:mc-batch:{batch}:{match_id}:{pair_group}:{region}:{mask}".encode()
     return int.from_bytes(hashlib.sha256(material).digest()[:8], "big")
 
 
@@ -119,21 +116,7 @@ def run_convergence(
     mc_fraction_of_sampling_se: float = 0.10,
     drift_fraction_of_sampling_se: float = 0.25,
 ) -> dict[str, Any]:
-    """Choose a spatial-null permutation count by a locked precision rule.
-
-    For each K and each independent Monte-Carlo batch, the same pilot matches are
-    evaluated. Natural/synthetic members still share common random placements
-    within a batch. At the largest K, host-cluster CR1 SE estimates observational
-    sampling uncertainty. A candidate K is accepted only if, for every estimable
-    region/contrast/metric:
-
-    1. batch-to-batch Monte-Carlo SD at K <= `mc_fraction_of_sampling_se` * host CR1 SE;
-    2. absolute drift of the batch-mean estimate from the previous K <=
-       `drift_fraction_of_sampling_se` * host CR1 SE.
-
-    The smallest K satisfying both rules is selected. Metrics with fewer than two
-    host clusters or exactly zero sampling SE are reported but cannot certify K.
-    """
+    """Choose a spatial-null permutation count by a locked precision rule."""
     if pilot_matches < 2:
         raise ValueError("pilot_matches must be at least 2")
     if batches < 2:
@@ -153,13 +136,9 @@ def run_convergence(
     ecc = str(config["qr"]["error_correction"]).upper()
     base_seed = int(config.get("seed", 267010))
 
-    # batch_effects[K][batch][key] -> list of match-level effects
     batch_effects: dict[int, dict[int, dict[tuple[str, str, int], list[float]]]] = {
         k: {batch: defaultdict(list) for batch in range(batches)} for k in k_values
     }
-    # Host-cluster reference uses batch 0 at the maximum K. MC variation is
-    # separately measured across batches; using one batch avoids averaging away
-    # the very randomness we are trying to quantify.
     reference_accumulators = {
         region: {contrast: ClusterAccumulator() for contrast in CONFIRMATORY_CONTRASTS}
         for region in REGIONS
@@ -246,8 +225,6 @@ def run_convergence(
                 drift_fraction_of_sampling_se * float(sampling_se) if certifiable else None
             )
             mc_ok = bool(certifiable and mc_sd <= float(mc_limit))
-            # The first K has no previous-K drift comparison and therefore cannot
-            # be selected even if MC SD is already small.
             drift_ok = bool(certifiable and drift is not None and drift <= float(drift_limit))
             if not certifiable:
                 certifiable_by_k[k] = False
@@ -329,8 +306,6 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     config = load_config(args.config)
-    # This module reads the already prepared payload artifact. It never re-samples
-    # the corpus while changing K.
     result = run_convergence(
         copy.deepcopy(config),
         pilot_matches=args.pilot_matches,
