@@ -53,7 +53,9 @@ def _load_pilot_matches(path: Path, limit: int) -> list[dict[str, dict[str, Any]
             raise ValueError(f"Pilot match {match_id} does not contain all four payload classes")
         result.append(records)
     if len(result) < limit:
-        raise ValueError(f"Requested {limit} pilot matches, found only {len(result)} complete matches")
+        raise ValueError(
+            f"Requested {limit} pilot matches, found only {len(result)} complete matches"
+        )
     return result
 
 
@@ -191,7 +193,9 @@ def run_convergence(
                             f"Pilot match {match_id} has inconsistent natural cluster metadata"
                         )
                     for region in REGIONS:
-                        vector = residuals[natural_class][region] - residuals[synthetic_class][region]
+                        vector = (
+                            residuals[natural_class][region] - residuals[synthetic_class][region]
+                        )
                         for metric_index, value in enumerate(vector):
                             batch_effects[k][batch][
                                 _effect_key(region, contrast, metric_index)
@@ -230,29 +234,21 @@ def run_convergence(
             mc_sd = float(batch_means.std(ddof=1))
             sampling_se = reference_se[key]
             cluster_count = reference_cluster_count[key]
-            drift = (
-                abs(mean_effect - previous_mean[key]) if key in previous_mean else None
-            )
+            drift = abs(mean_effect - previous_mean[key]) if key in previous_mean else None
             certifiable = (
                 sampling_se is not None
                 and math.isfinite(float(sampling_se))
                 and float(sampling_se) > 0
                 and cluster_count >= 2
             )
-            mc_limit = (
-                mc_fraction_of_sampling_se * float(sampling_se) if certifiable else None
-            )
+            mc_limit = mc_fraction_of_sampling_se * float(sampling_se) if certifiable else None
             drift_limit = (
                 drift_fraction_of_sampling_se * float(sampling_se) if certifiable else None
             )
             mc_ok = bool(certifiable and mc_sd <= float(mc_limit))
             # The first K has no previous-K drift comparison and therefore cannot
             # be selected even if MC SD is already small.
-            drift_ok = bool(
-                certifiable
-                and drift is not None
-                and drift <= float(drift_limit)
-            )
+            drift_ok = bool(certifiable and drift is not None and drift <= float(drift_limit))
             if not certifiable:
                 certifiable_by_k[k] = False
             if not (mc_ok and drift_ok):
@@ -280,11 +276,7 @@ def run_convergence(
             previous_mean[key] = mean_effect
 
     selected_k = next(
-        (
-            k
-            for k in k_values[1:]
-            if certifiable_by_k[k] and accepted_by_k[k]
-        ),
+        (k for k in k_values[1:] if certifiable_by_k[k] and accepted_by_k[k]),
         None,
     )
     result = {
