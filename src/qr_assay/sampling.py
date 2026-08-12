@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 import urllib.parse
@@ -32,6 +33,38 @@ class Reservoir:
             self.items[position] = item
 
 
+def _canonicalize_payload(payload: str, *, granularity: str, scheme_policy: str) -> str | None:
+    """Create the actual QR payload after source parsing.
+
+    ``granularity`` is applied symmetrically to surface and onion sources.
+    ``scheme_policy=strip`` removes the otherwise arbitrary http/https difference
+    before byte-length matching; ``https`` forces a common scheme; ``preserve``
+    retains the observed scheme.
+    """
+    try:
+        parsed = urllib.parse.urlsplit(payload)
+    except ValueError:
+        return None
+    if not parsed.hostname:
+        return None
+    netloc = parsed.netloc.lower()
+    path = parsed.path or "/"
+    query = parsed.query
+    if granularity == "origin":
+        path = "/"
+        query = ""
+    if scheme_policy == "strip":
+        return netloc + path + (f"?{query}" if query else "")
+    scheme = parsed.scheme.lower() if scheme_policy == "preserve" else "https"
+    return urllib.parse.urlunsplit((scheme, netloc, path, query, ""))
+
+
+def _host_hash(payload: str) -> str:
+    candidate = payload if "://" in payload else f"https://{payload}"
+    host = urllib.parse.urlsplit(candidate).hostname or ""
+    return hashlib.sha256(host.lower().encode("utf-8")).hexdigest()
+
+
 def _collect(config: dict[str, Any], kind: str) -> tuple[dict[int, Reservoir], dict[str, Any]]:
     source_config = config["sources"][kind]
     paths = source_config.get("paths", [])
@@ -42,28 +75,28 @@ def _collect(config: dict[str, Any], kind: str) -> tuple[dict[int, Reservoir], d
     capacity = int(config["sampling"]["reservoir_per_length"])
     min_bytes = int(config["sampling"]["min_bytes"])
     max_bytes = int(config["sampling"]["max_bytes"])
+    granularity = str(source_config.get("granularity", "url"))
+    scheme_policy = str(config["sampling"].get("scheme_policy", "strip"))
     buckets: dict[int, Reservoir] = {}
     total = 0
     accepted = 0
-    origin_seen: set[int] | None = (
-        set() if kind == "onion" and source_config.get("granularity", "url") == "origin" else None
-    )
-    for source, payload in iter_urls(
+    seen_canonical: set[int] = set()
+    for source, raw_payload in iter_urls(
         kind,
         paths,
         scan_limit=source_config.get("scan_limit"),
         deduplicate=bool(source_config.get("deduplicate", True)),
     ):
         total += 1
-        if origin_seen is not None:
-            parsed = urllib.parse.urlsplit(payload)
-            if not parsed.hostname:
-                continue
-            payload = f"http://{parsed.hostname}/"
-            digest = stable_u64(payload)
-            if digest in origin_seen:
-                continue
-            origin_seen.add(digest)
+        payload = _canonicalize_payload(
+            raw_payload, granularity=granularity, scheme_policy=scheme_policy
+        )
+        if not payload:
+            continue
+        digest = stable_u64(payload)
+        if digest in seen_canonical:
+            continue
+        seen_canonical.add(digest)
         length = len(payload.encode("utf-8"))
         if length < min_bytes or length > max_bytes:
             continue
@@ -75,6 +108,8 @@ def _collect(config: dict[str, Any], kind: str) -> tuple[dict[int, Reservoir], d
         "read": total,
         "accepted": accepted,
         "length_buckets": len(buckets),
+        "granularity": granularity,
+        "scheme_policy": scheme_policy,
         "files": inventory,
     }
 
@@ -122,12 +157,11 @@ def prepare_payloads(config: dict[str, Any]) -> dict[str, Any]:
             "No byte-length overlap between surface and onion sources. "
             f"Surface lengths={surface_lengths[:12]}..., onion lengths={onion_lengths[:12]}..."
         )
-    masks = [int(x) for x in config["qr"]["masks"]]
     store_text = bool(config["outputs"].get("store_payload_text", True))
+    synthetic_mode = str(config["sampling"].get("synthetic_mode", "grammar_random"))
     class_counts: dict[str, int] = defaultdict(int)
     with open_text(payload_path, "wt") as handle:
         for match_id, (byte_length, surface_item, onion_item) in enumerate(matches):
-            mask = masks[match_id % len(masks)]
             surface_source, surface_payload = surface_item
             onion_source, onion_payload = onion_item
             rows = [
@@ -137,24 +171,26 @@ def prepare_payloads(config: dict[str, Any]) -> dict[str, Any]:
                     "surface_synthetic",
                     "surface",
                     True,
-                    "generated:surface_natural",
+                    f"generated:surface_natural:{synthetic_mode}",
                     grammar_matched(
                         surface_payload,
                         seed=int(config["seed"]),
                         match_id=match_id,
                         corpus="surface",
+                        mode=synthetic_mode,
                     ),
                 ),
                 (
                     "onion_synthetic",
                     "onion",
                     True,
-                    "generated:onion_natural",
+                    f"generated:onion_natural:{synthetic_mode}",
                     grammar_matched(
                         onion_payload,
                         seed=int(config["seed"]),
                         match_id=match_id,
                         corpus="onion",
+                        mode=synthetic_mode,
                     ),
                 ),
             ]
@@ -164,14 +200,14 @@ def prepare_payloads(config: dict[str, Any]) -> dict[str, Any]:
                     "payload_class": payload_class,
                     "grammar": grammar,
                     "synthetic": synthetic,
+                    "synthetic_mode": synthetic_mode if synthetic else None,
                     "source": source,
+                    "source_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                    "host_sha256": _host_hash(payload),
                     "payload": payload if store_text else None,
-                    "payload_sha256": __import__("hashlib")
-                    .sha256(payload.encode("utf-8"))
-                    .hexdigest(),
+                    "payload_sha256": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
                     "byte_length": len(payload.encode("utf-8")),
                     "matched_byte_length": byte_length,
-                    "mask": mask,
                 }
                 handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
                 class_counts[payload_class] += 1
@@ -181,6 +217,7 @@ def prepare_payloads(config: dict[str, Any]) -> dict[str, Any]:
         "requested_pairs": target,
         "complete": len(matches) == target,
         "class_counts": dict(class_counts),
+        "synthetic_mode": synthetic_mode,
         "surface": surface_stats,
         "onion": onion_stats,
         "common_byte_lengths": sorted(set(surface) & set(onion)),
