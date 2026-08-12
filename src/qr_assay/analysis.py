@@ -210,7 +210,9 @@ def _add_class_contrasts(
 ) -> None:
     for contrast, (left, right) in CONTRASTS.items():
         for metric in INFERENCE_METRICS:
-            destination[contrast][metric].add(class_means[left][metric] - class_means[right][metric])
+            destination[contrast][metric].add(
+                class_means[left][metric] - class_means[right][metric]
+            )
 
 
 def analyze_features(config: dict[str, Any]) -> dict[str, Any]:
