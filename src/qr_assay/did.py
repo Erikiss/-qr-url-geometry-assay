@@ -60,6 +60,62 @@ class SideAccumulator:
         return max((int(value[0]) for value in self.clusters.values()), default=0)
 
 
+class IndependentDifference:
+    """Difference of two independently clustered corpus means.
+
+    The artificial one-to-one Surface/Onion matching is never used as a covariance
+    assumption. Variances are estimated on each natural side and then added.
+    """
+
+    def __init__(self) -> None:
+        self.surface = SideAccumulator()
+        self.onion = SideAccumulator()
+
+    def add_surface(self, values: np.ndarray, *, cluster: str) -> None:
+        self.surface.add(values, cluster=cluster)
+
+    def add_onion(self, values: np.ndarray, *, cluster: str) -> None:
+        self.onion.add(values, cluster=cluster)
+
+    def summarize(self, *, surface_level: str, onion_level: str) -> list[dict[str, Any]]:
+        mean = self.onion.mean() - self.surface.mean()
+        var_surface = self.surface.variance()
+        var_onion = self.onion.variance()
+        rows: list[dict[str, Any]] = []
+        for index, metric in enumerate(CORE_METRICS):
+            finite = bool(np.isfinite(var_surface[index]) and np.isfinite(var_onion[index]))
+            variance = float(var_surface[index] + var_onion[index]) if finite else None
+            se = math.sqrt(max(0.0, variance)) if variance is not None else None
+            rows.append(
+                {
+                    "metric": metric,
+                    "n_surface": self.surface.n,
+                    "n_onion": self.onion.n,
+                    "mean_difference_in_differences": float(mean[index]),
+                    "surface_cluster_level": surface_level,
+                    "onion_cluster_level": onion_level,
+                    "surface_cluster_count": len(self.surface.clusters),
+                    "onion_cluster_count": len(self.onion.clusters),
+                    "surface_effective_cluster_count": self.surface.effective_clusters(),
+                    "onion_effective_cluster_count": self.onion.effective_clusters(),
+                    "surface_max_cluster_size": self.surface.max_cluster(),
+                    "onion_max_cluster_size": self.onion.max_cluster(),
+                    "surface_cluster_variance": (
+                        float(var_surface[index]) if np.isfinite(var_surface[index]) else None
+                    ),
+                    "onion_cluster_variance": (
+                        float(var_onion[index]) if np.isfinite(var_onion[index]) else None
+                    ),
+                    "independent_cluster_standard_error": se,
+                    "estimable": bool(se is not None and math.isfinite(se) and se > 0.0),
+                    "cluster_counts_ge_20": (
+                        len(self.surface.clusters) >= 20 and len(self.onion.clusters) >= 20
+                    ),
+                }
+            )
+        return rows
+
+
 def _normal_p(mean: float, se: float) -> float:
     return math.erfc(abs(mean / se) / math.sqrt(2.0))
 
@@ -236,42 +292,13 @@ def analyze_difference_in_differences(config: dict[str, Any]) -> dict[str, Any]:
 
     def summarize(level: str) -> list[dict[str, Any]]:
         tables = host if level == "host" else source
-        surface = tables["surface"]
-        onion = tables["onion"]
-        mean = onion.mean() - surface.mean()
-        var_surface = surface.variance()
-        var_onion = onion.variance()
-        rows = []
-        for index, metric in enumerate(CORE_METRICS):
-            finite = bool(np.isfinite(var_surface[index]) and np.isfinite(var_onion[index]))
-            variance = float(var_surface[index] + var_onion[index]) if finite else None
-            se = math.sqrt(max(0.0, variance)) if variance is not None else None
-            rows.append(
-                {
-                    "metric": metric,
-                    "n_surface": surface.n,
-                    "n_onion": onion.n,
-                    "mean_difference_in_differences": float(mean[index]),
-                    "cluster_level": level,
-                    "surface_cluster_count": len(surface.clusters),
-                    "onion_cluster_count": len(onion.clusters),
-                    "surface_effective_cluster_count": surface.effective_clusters(),
-                    "onion_effective_cluster_count": onion.effective_clusters(),
-                    "surface_max_cluster_size": surface.max_cluster(),
-                    "onion_max_cluster_size": onion.max_cluster(),
-                    "surface_cluster_variance": (
-                        float(var_surface[index]) if np.isfinite(var_surface[index]) else None
-                    ),
-                    "onion_cluster_variance": (
-                        float(var_onion[index]) if np.isfinite(var_onion[index]) else None
-                    ),
-                    "independent_cluster_standard_error": se,
-                    "estimable": bool(se is not None and math.isfinite(se) and se > 0.0),
-                    "cluster_counts_ge_20": (
-                        len(surface.clusters) >= 20 and len(onion.clusters) >= 20
-                    ),
-                }
-            )
+        difference = IndependentDifference()
+        difference.surface = tables["surface"]
+        difference.onion = tables["onion"]
+        rows = difference.summarize(
+            surface_level=f"surface_{level}",
+            onion_level=f"onion_{level}",
+        )
         _apply_familywise(rows)
         return rows
 
