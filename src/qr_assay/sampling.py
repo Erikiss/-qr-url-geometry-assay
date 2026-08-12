@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .fileio import open_text
-from .sources import iter_urls, source_inventory, stable_u64
+from .sources import iter_urls, source_inventory, stable_digest128
 from .synthetic import grammar_matched
 
 
@@ -36,9 +36,9 @@ class Reservoir:
 def _canonicalize_payload(payload: str, *, granularity: str, scheme_policy: str) -> str | None:
     """Create the actual QR payload after source parsing.
 
-    ``granularity`` is applied symmetrically to surface and onion sources.
-    ``scheme_policy=strip`` removes the otherwise arbitrary http/https difference
-    before byte-length matching; ``https`` forces a common scheme; ``preserve``
+    `granularity` is applied symmetrically to surface and onion sources.
+    `scheme_policy=strip` removes the otherwise arbitrary http/https difference
+    before byte-length matching; `https` forces a common scheme; `preserve`
     retains the observed scheme.
     """
     try:
@@ -80,12 +80,29 @@ def _collect(config: dict[str, Any], kind: str) -> tuple[dict[int, Reservoir], d
     buckets: dict[int, Reservoir] = {}
     total = 0
     accepted = 0
-    seen_canonical: set[int] = set()
+
+    # Origin-level canonicalization already collapses all paths for one host, so
+    # raw URL deduplication would only waste memory. URL-level crawl unions use a
+    # disk-backed digest table by default to avoid multi-million-entry Python sets.
+    requested_dedup = bool(source_config.get("deduplicate", True))
+    raw_deduplicate = requested_dedup and granularity == "url"
+    dedup_backend = str(
+        source_config.get("dedup_backend", "sqlite" if raw_deduplicate else "memory")
+    )
+    dedup_db_path = (
+        Path(config["outputs"]["directory"]) / ".dedup" / f"{kind}.sqlite"
+        if raw_deduplicate and dedup_backend == "sqlite"
+        else None
+    )
+
+    canonical_seen: set[bytes] = set()
     for source, raw_payload in iter_urls(
         kind,
         paths,
         scan_limit=source_config.get("scan_limit"),
-        deduplicate=bool(source_config.get("deduplicate", True)),
+        deduplicate=raw_deduplicate,
+        dedup_backend=dedup_backend,
+        dedup_db_path=dedup_db_path,
     ):
         total += 1
         payload = _canonicalize_payload(
@@ -93,10 +110,10 @@ def _collect(config: dict[str, Any], kind: str) -> tuple[dict[int, Reservoir], d
         )
         if not payload:
             continue
-        digest = stable_u64(payload)
-        if digest in seen_canonical:
+        digest = stable_digest128(payload)
+        if digest in canonical_seen:
             continue
-        seen_canonical.add(digest)
+        canonical_seen.add(digest)
         length = len(payload.encode("utf-8"))
         if length < min_bytes or length > max_bytes:
             continue
@@ -110,6 +127,8 @@ def _collect(config: dict[str, Any], kind: str) -> tuple[dict[int, Reservoir], d
         "length_buckets": len(buckets),
         "granularity": granularity,
         "scheme_policy": scheme_policy,
+        "raw_deduplicate": raw_deduplicate,
+        "dedup_backend": dedup_backend if raw_deduplicate else "canonical-128bit-memory",
         "files": inventory,
     }
 
