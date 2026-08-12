@@ -129,7 +129,7 @@ def grammar_matched(
     corpus: str,
     mode: str = "grammar_random",
 ) -> str:
-    """Generate a deterministic structural null without changing UTF-8 length.
+    """Generate one deterministic control from exactly the declared null family.
 
     Modes form an ordered null ladder for ordinary URLs:
     ``token_shuffle`` preserves each token's character multiset,
@@ -140,6 +140,11 @@ def grammar_matched(
     checksum-valid random onion address because the host itself is cryptographic,
     not a natural-language token. Path/query material still follows the chosen mode.
     Synthetic addresses are never resolved.
+
+    A degenerate payload is allowed to remain unchanged when the declared null has
+    no distinct permutation (for example a token containing only repeated copies
+    of one character). We never silently fall back to a weaker null family. The
+    pipeline records unchanged-control frequency so null degeneracy is visible.
     """
     if mode not in NULL_MODES:
         raise ValueError(f"Unknown synthetic null mode {mode!r}; choose from {sorted(NULL_MODES)}")
@@ -151,10 +156,6 @@ def grammar_matched(
     else:
         result = _grammar_random(payload, rng, corpus)
 
-    if result == payload:
-        # Degenerate short strings can be unchanged after a permutation. Fall back
-        # to the weakest grammar-preserving randomization, still deterministically.
-        result = _grammar_random(payload, rng, corpus)
     if len(result.encode("utf-8")) != len(payload.encode("utf-8")):
         raise AssertionError("Synthetic payload did not preserve UTF-8 byte length")
     return result
