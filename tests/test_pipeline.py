@@ -69,6 +69,13 @@ def test_end_to_end(tmp_path: Path):
     assert manifest["generation"]["masks_per_payload"] == 3
     assert manifest["analysis_summary"]["quality_control"]["passed"]
     assert (tmp_path / "results" / "report.md").exists()
+    assert (tmp_path / "results" / "confirmatory_report.md").exists()
+    assert Path(manifest["report"]).name == "confirmatory_report.md"
+    assert Path(manifest["descriptive_report"]).name == "report.md"
+    with (tmp_path / "results" / "confirmatory_report.md").open(encoding="utf-8") as handle:
+        confirmatory_text = handle.read()
+    assert "Confirmatory natural-vs-null effects" in confirmatory_text
+    assert "Host-clustered" in confirmatory_text or "host-clustered" in confirmatory_text
     with (tmp_path / "results" / "analysis.json").open(encoding="utf-8") as handle:
         analysis = json.load(handle)
     assert len(analysis["paired_effects"]) > 0
