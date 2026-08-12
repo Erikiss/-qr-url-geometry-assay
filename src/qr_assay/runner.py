@@ -13,6 +13,7 @@ from typing import Any
 from . import __version__
 from .analysis import analyze_features, write_report
 from .cluster import analyze_clustered_core
+from .codeword import analyze_codeword_regions
 from .config import config_sha256
 from .generate import generate_features
 from .sampling import prepare_payloads
@@ -48,6 +49,11 @@ def run_all(config: dict[str, Any]) -> dict[str, Any]:
     generation = generate_features(config)
     analysis = analyze_features(config)
     clustered = analyze_clustered_core(config)
+    codeword = (
+        analyze_codeword_regions(config)
+        if bool(config.get("analysis", {}).get("codeword_diagnostics", False))
+        else None
+    )
     report_path = write_report(config, preparation, generation, analysis)
     output_dir = Path(config["outputs"]["directory"])
     manifest = {
@@ -79,6 +85,16 @@ def run_all(config: dict[str, Any]) -> dict[str, Any]:
             "invalid_matches": clustered["invalid_matches"],
             "method": clustered["method"],
         },
+        "codeword_analysis": (
+            {
+                "output": codeword["output"],
+                "complete_matches": codeword["complete_matches"],
+                "invalid_matches": codeword["invalid_matches"],
+                "qrs_encoded": codeword["qrs_encoded"],
+            }
+            if codeword is not None
+            else None
+        ),
         "report": str(report_path),
     }
     manifest_path = output_dir / config["outputs"]["manifest_file"]
