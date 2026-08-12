@@ -42,6 +42,7 @@ def test_origin_granularity_deduplicates_paths_and_strips_scheme(tmp_path):
             "max_bytes": 200,
             "scheme_policy": "strip",
         },
+        "outputs": {"directory": str(tmp_path / "out")},
     }
     buckets, stats = _collect(config, "onion")
     assert stats["accepted"] == 1
