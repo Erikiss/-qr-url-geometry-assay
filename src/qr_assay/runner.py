@@ -141,9 +141,7 @@ def run_all(config: dict[str, Any]) -> dict[str, Any]:
                 "output": spatial_null["output"],
                 "complete_matches": spatial_null["complete_matches"],
                 "invalid_matches": spatial_null["invalid_matches"],
-                "permutations_per_payload_region": spatial_null[
-                    "permutations_per_payload_region"
-                ],
+                "permutations_per_payload_region": spatial_null["permutations_per_payload_region"],
                 "common_random_numbers": spatial_null[
                     "common_random_numbers_within_natural_synthetic_pair"
                 ],
