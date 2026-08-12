@@ -16,6 +16,7 @@ from .bitstream import analyze_bitstream_baseline
 from .cluster import analyze_clustered_core
 from .codeword import analyze_codeword_regions
 from .config import config_sha256
+from .confirmatory_report import write_confirmatory_report
 from .generate import generate_features
 from .null_qc import analyze_null_qc
 from .sampling import prepare_payloads
@@ -62,7 +63,16 @@ def run_all(config: dict[str, Any]) -> dict[str, Any]:
         if bool(config.get("analysis", {}).get("bitstream_diagnostics", False))
         else None
     )
-    report_path = write_report(config, preparation, generation, analysis)
+    descriptive_report_path = write_report(config, preparation, generation, analysis)
+    confirmatory_report_path = write_confirmatory_report(
+        config,
+        preparation,
+        null_qc,
+        clustered,
+        descriptive_report=descriptive_report_path,
+        codeword=codeword,
+        bitstream=bitstream,
+    )
     output_dir = Path(config["outputs"]["directory"])
     manifest = {
         "assay_version": __version__,
@@ -119,7 +129,8 @@ def run_all(config: dict[str, Any]) -> dict[str, Any]:
             if bitstream is not None
             else None
         ),
-        "report": str(report_path),
+        "report": str(confirmatory_report_path),
+        "descriptive_report": str(descriptive_report_path),
     }
     manifest_path = output_dir / config["outputs"]["manifest_file"]
     with manifest_path.open("w", encoding="utf-8") as handle:
