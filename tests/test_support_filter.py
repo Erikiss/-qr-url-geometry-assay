@@ -4,9 +4,7 @@ from qr_assay.sampling import _collect
 def test_shared_length_support_is_applied_before_dedup(tmp_path):
     source = tmp_path / "surface.txt"
     source.write_text(
-        "https://a.example/keep\n"
-        "https://b.example/drop-long\n"
-        "https://c.example/keep\n",
+        "https://a.example/keep\nhttps://b.example/drop-long\nhttps://c.example/keep\n",
         encoding="utf-8",
     )
     config = {
