@@ -31,9 +31,10 @@ def test_inversion_is_an_involution_and_complements_density():
     restored = transform_matrix(inverse, inverted=True)
     assert np.array_equal(restored, matrix)
     assert geometry_features(inverse)["density"] == 1.0 - geometry_features(matrix)["density"]
-    assert geometry_features(inverse, region)["density"] == 1.0 - geometry_features(
-        matrix, region
-    )["density"]
+    assert (
+        geometry_features(inverse, region)["density"]
+        == 1.0 - geometry_features(matrix, region)["density"]
+    )
 
 
 def test_data_module_mask_excludes_fixed_qr_function_patterns():
