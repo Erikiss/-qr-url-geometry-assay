@@ -55,7 +55,9 @@ def test_synthetic_is_deterministic_within_mode():
 def test_default_null_draw_is_stable_when_match_id_changes():
     payload = "/stable/path?value=abcdef123456"
     first = grammar_matched(payload, seed=7, match_id=1, corpus="surface", mode="grammar_random")
-    second = grammar_matched(payload, seed=7, match_id=9999, corpus="surface", mode="grammar_random")
+    second = grammar_matched(
+        payload, seed=7, match_id=9999, corpus="surface", mode="grammar_random"
+    )
     assert first == second
 
 
