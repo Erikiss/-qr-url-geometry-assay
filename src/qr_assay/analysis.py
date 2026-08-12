@@ -47,9 +47,7 @@ DATA_METRICS = (
 GROUP_METRICS = FULL_METRICS + DATA_METRICS
 # Principal-axis orientation is axial (modulo 180 degrees). Never linearly
 # difference raw angles; use cos(2theta)/sin(2theta) instead.
-INFERENCE_METRICS = tuple(
-    metric for metric in GROUP_METRICS if "principal_angle_deg" not in metric
-)
+INFERENCE_METRICS = tuple(metric for metric in GROUP_METRICS if "principal_angle_deg" not in metric)
 CLASSES = {
     "surface_natural",
     "onion_natural",
@@ -119,9 +117,7 @@ def _group_key(row: dict[str, Any]) -> tuple[Any, ...]:
 
 
 def _add_group(groups: dict[tuple[Any, ...], dict[str, RunningStat]], row: dict[str, Any]) -> None:
-    bucket = groups.setdefault(
-        _group_key(row), {metric: RunningStat() for metric in GROUP_METRICS}
-    )
+    bucket = groups.setdefault(_group_key(row), {metric: RunningStat() for metric in GROUP_METRICS})
     for metric in GROUP_METRICS:
         bucket[metric].add(float(row[metric]))
 
@@ -213,8 +209,7 @@ def analyze_features(config: dict[str, Any]) -> dict[str, Any]:
     strata_counts: dict[tuple[Any, ...], dict[str, int]] = defaultdict(lambda: defaultdict(int))
     all_groups: dict[tuple[Any, ...], dict[str, RunningStat]] = {}
     paired_effects: dict[str, dict[str, RunningStat]] = {
-        contrast: {metric: RunningStat() for metric in INFERENCE_METRICS}
-        for contrast in CONTRASTS
+        contrast: {metric: RunningStat() for metric in INFERENCE_METRICS} for contrast in CONTRASTS
     }
     rows = 0
     qc_density_failures = 0
@@ -455,7 +450,9 @@ def write_report(
         "data_orientation_cos2",
         "data_orientation_sin2",
     }
-    core_effects = [effect for effect in analysis["paired_effects"] if effect["metric"] in core_metrics]
+    core_effects = [
+        effect for effect in analysis["paired_effects"] if effect["metric"] in core_metrics
+    ]
     lines.extend(
         [
             "",
