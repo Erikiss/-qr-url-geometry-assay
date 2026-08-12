@@ -64,7 +64,9 @@ def _cluster_table(contrasts: dict[str, Any], level: str) -> list[str]:
         for row in result[key]:
             low = row["ci95_low_normal_cr1"]
             high = row["ci95_high_normal_cr1"]
-            interval = f"[{_fmt(low)}, {_fmt(high)}]" if low is not None and high is not None else "NA"
+            interval = (
+                f"[{_fmt(low)}, {_fmt(high)}]" if low is not None and high is not None else "NA"
+            )
             lines.append(
                 f"| {contrast} | {row['metric']} | {row['n_matches']:,} | "
                 f"{row['cluster_count']:,} | {row['effective_cluster_count']:.2f} | "
@@ -93,9 +95,10 @@ def write_confirmatory_report(
     onion_granularity = str(config["sources"]["onion"].get("granularity", "url"))
     support = preparation.get("matching", {})
     selected_by_length = support.get("selected_by_length", {})
-    support_text = ", ".join(
-        f"{length} B: {count:,}" for length, count in selected_by_length.items()
-    ) or "not available"
+    support_text = (
+        ", ".join(f"{length} B: {count:,}" for length, count in selected_by_length.items())
+        or "not available"
+    )
 
     lines = [
         "# QR URL Geometry Assay — confirmatory report",
