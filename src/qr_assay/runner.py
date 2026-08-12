@@ -6,6 +6,7 @@ import platform
 import subprocess
 import time
 from datetime import UTC, datetime
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,17 @@ def _git_commit() -> str | None:
         return None
 
 
+def _package_versions() -> dict[str, str | None]:
+    packages = ("qr-url-geometry-assay", "qrcode", "numpy", "Pillow", "PyYAML")
+    result: dict[str, str | None] = {}
+    for package in packages:
+        try:
+            result[package] = version(package)
+        except PackageNotFoundError:
+            result[package] = None
+    return result
+
+
 def run_all(config: dict[str, Any]) -> dict[str, Any]:
     started = datetime.now(UTC)
     start = time.perf_counter()
@@ -48,6 +60,7 @@ def run_all(config: dict[str, Any]) -> dict[str, Any]:
             "platform": platform.platform(),
             "logical_cpus": os.cpu_count(),
             "git_commit": _git_commit(),
+            "packages": _package_versions(),
         },
         "preparation": preparation,
         "generation": generation,
