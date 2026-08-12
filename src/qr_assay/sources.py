@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import bz2
 import gzip
 import hashlib
@@ -98,6 +99,23 @@ def normalize_surface(value: str) -> str | None:
         return None
 
 
+def valid_v3_onion_label(label: str) -> bool:
+    """Validate the self-authenticating v3 onion hostname checksum/version."""
+    if len(label) != 56 or any(ch not in "abcdefghijklmnopqrstuvwxyz234567" for ch in label):
+        return False
+    try:
+        decoded = base64.b32decode(label.upper(), casefold=True)
+    except (ValueError, base64.binascii.Error):
+        return False
+    if len(decoded) != 35:
+        return False
+    public_key, checksum, version = decoded[:32], decoded[32:34], decoded[34:]
+    if version != b"\x03":
+        return False
+    expected = hashlib.sha3_256(b".onion checksum" + public_key + version).digest()[:2]
+    return checksum == expected
+
+
 def normalize_onion(value: str) -> list[str]:
     found: list[str] = []
     for match in ONION_RE.finditer(value):
@@ -110,6 +128,8 @@ def normalize_onion(value: str) -> list[str]:
             if len(label) not in {16, 56} or any(
                 ch not in "abcdefghijklmnopqrstuvwxyz234567" for ch in label
             ):
+                continue
+            if len(label) == 56 and not valid_v3_onion_label(label):
                 continue
             port = f":{parsed.port}" if parsed.port else ""
             path = parsed.path or "/"
