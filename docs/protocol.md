@@ -8,7 +8,7 @@ It does **not** measure payload semantics, neural representations, attention-hea
 
 The primary confirmatory estimand is conditional:
 
-> among surface and onion payloads matched on byte length, QR version, ECC and then averaged across all eight QR masks, how much geometric structure remains in natural strings relative to a declared structural null?
+> among surface and onion payloads matched on byte length, QR version, ECC and then averaged across all eight QR masks, how much geometry in the QR **data/ECC region** remains associated with natural string structure relative to a declared structural null?
 
 The full run uses `origin` granularity for **both** surface and onion sources and strips schemes before matching. The URL/path experiment is separate and uses `url` granularity for both corpora.
 
@@ -27,7 +27,7 @@ All configured QR masks are generated for **every payload**. Mask is therefore a
 
 ## Structural-null ladder
 
-`samping.synthetic_mode` selects one null per run. Publication claims should be repeated across the ladder rather than relying on one synthetic family:
+`sampling.synthetic_mode` selects one null per run. Publication claims should be repeated across the ladder rather than relying on one synthetic family:
 
 1. `token_shuffle` — preserves token-level character multisets where meaningful;
 2. `class_permute` — preserves global ASCII unigram counts within lower/upper/digit classes while destroying positions;
@@ -57,7 +57,20 @@ Every matched unit is controlled on:
 - QR version;
 - all configured masks, factorialized within payload.
 
-The density-balanced analysis additionally intersects classes on `(byte length, QR version, ECC, mean-density bin)`, where mean density is averaged across masks for the payload.
+The density-balanced analysis additionally intersects classes on `(byte length, QR version, ECC, mean data/ECC-density bin)`, where density is averaged across masks for the payload.
+
+## Feature regions
+
+Every transformed QR produces two parallel feature batteries:
+
+1. **full matrix** — finder, timing, alignment, format/version information and data/ECC modules together;
+2. **data/ECC modules only** — fixed QR function patterns are masked out before computing geometry.
+
+The **data/ECC-only region is primary**. The whole-matrix battery is a sensitivity/control analysis because fixed finder and timing structures can dominate low-order geometric moments while carrying no payload-specific information.
+
+The data/ECC mask is reconstructed using the same `qrcode` library's pre-data-map function-pattern setup rather than a separately handwritten coordinate table. Region-shape and inversion-complement invariants are tested in CI.
+
+This split does **not yet** separate payload codewords from Reed–Solomon ECC codewords. A later refinement may do so if the data/ECC effect survives the present controls.
 
 ## Geometric calibration factors
 
@@ -76,34 +89,37 @@ Scale is configured separately. Bit inversion is the exact involution `Q' = 1 - 
 
 ## Observable families
 
+All primary quantities below are computed in the data/ECC region; corresponding full-matrix quantities are retained as sensitivity controls.
+
 ### Radial / stretching-like
 
-- `radial_mean`;
-- `radial_std`;
-- covariance trace.
+- `data_radial_mean`;
+- `data_radial_std`;
+- `data_cov_trace`.
 
 ### Translation-like
 
-- normalized black-module centroid `(centroid_x, centroid_y)`;
-- centroid radius.
+- normalized data/ECC black-module centroid `(data_centroid_x, data_centroid_y)`;
+- `data_centroid_radius`.
 
 ### Axial orientation
 
-- anisotropy;
-- `orientation_cos2`;
-- `orientation_sin2`.
+- `data_anisotropy`;
+- `data_orientation_cos2`;
+- `data_orientation_sin2`.
 
-`principal_angle_deg` is descriptive only. Principal-axis orientation is axial modulo 180°, so linear angle subtraction is invalid around the wrap boundary. Inferential comparisons use the doubled-angle embedding.
+`data_principal_angle_deg` is descriptive only. Principal-axis orientation is axial modulo 180°, so linear angle subtraction is invalid around the wrap boundary. Inferential comparisons use the doubled-angle embedding.
 
-### Texture / symmetry controls
+### Texture controls
 
-- horizontal and vertical transition rates;
-- 180° rotational similarity;
-- horizontal and vertical reflection similarity.
+- `data_transition_h`;
+- `data_transition_v`.
+
+Whole-matrix symmetry metrics are retained as calibration controls.
 
 ## Inference
 
-The primary paired inference unit is **one `match_id` after averaging the primary geometry over all configured QR masks**. Masks and deterministic rotations are repeated measures, not independent observations.
+The primary paired inference unit is **one `match_id` after averaging the primary 0°/normal geometry over all configured QR masks**. Masks and deterministic rotations are repeated measures, not independent observations.
 
 The repository still reports normal-approximation intervals and Holm-adjusted p-values as secondary diagnostics. For publication:
 
@@ -119,10 +135,11 @@ A run is invalid if any of these occur:
 1. a `match_id` lacks any of the four payload classes;
 2. a payload lacks any configured mask;
 3. byte length, QR version, or ECC differ inside a match;
-4. normal rotations/reflections/scales change module density;
-5. inverted density is not exactly `1 - base_density` at module resolution;
-6. a source file or effective configuration is missing from the manifest;
-7. corpus comparison is reported without unbalanced and density-balanced counts.
+4. normal rotations/reflections/scales change whole-matrix or data/ECC-region density;
+5. inverted whole-matrix density is not exactly `1 - base_density`;
+6. inverted data/ECC density is not exactly `1 - base_data_density`;
+7. a source file or effective configuration is missing from the manifest;
+8. corpus comparison is reported without unbalanced and density-balanced counts.
 
 ## Required falsification battery before the million-scale run
 
@@ -132,7 +149,8 @@ Before treating a full-corpus result as scientific evidence, run small synthetic
 - unigram-only world: matched grammar with deliberately shifted character frequencies;
 - ordering world: equal character counts with different local sequence order;
 - orientation-QC world: known asymmetric matrices transformed by exact `D4` elements;
-- mask-stability world: the same payload under all eight masks.
+- mask-stability world: the same payload under all eight masks;
+- function-pattern world: perturb only fixed QR function modules and verify that data/ECC-region metrics remain unchanged.
 
 The assay should identify the planted distinction and stay null when none was planted.
 
