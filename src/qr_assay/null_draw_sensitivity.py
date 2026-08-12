@@ -209,9 +209,7 @@ def run_null_draw_sensitivity(
                 synthetic_vector, synthetic_version = _payload_core_vector(synthetic, config)
                 if synthetic_version != natural_versions[(match_id, corpus)]:
                     raise AssertionError("Structural null changed QR version despite byte matching")
-                match_effects[corpus] = (
-                    natural_vectors[(match_id, corpus)] - synthetic_vector
-                )
+                match_effects[corpus] = natural_vectors[(match_id, corpus)] - synthetic_vector
             seed_effects.append(match_effects)
         effects.append(seed_effects)
 
