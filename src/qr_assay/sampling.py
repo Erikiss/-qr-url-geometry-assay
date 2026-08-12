@@ -225,16 +225,16 @@ def _collect(config: dict[str, Any], kind: str) -> tuple[dict[int, Reservoir], d
         stats.update(
             {
                 "allowed_versions": sorted(allowed_onion_versions),
-                "accepted_by_version_before_length_filter": dict(sorted(onion_version_counts.items())),
+                "accepted_by_version_before_length_filter": dict(
+                    sorted(onion_version_counts.items())
+                ),
                 "rejected_by_version": dict(sorted(rejected_onion_versions.items())),
             }
         )
     return buckets, stats
 
 
-def _equal_length_quotas(
-    available: dict[int, int], target: int, seed: int
-) -> dict[int, int]:
+def _equal_length_quotas(available: dict[int, int], target: int, seed: int) -> dict[int, int]:
     """Legacy sensitivity: approximately equal representation of byte lengths."""
     rng = random.Random(seed)
     lengths = list(available)
@@ -327,9 +327,7 @@ def _match_payloads(
         length: min(len(surface[length].items), len(onion[length].items)) for length in common
     }
     available = {length: count for length, count in available.items() if count > 0}
-    overlap = {
-        length: min(surface[length].seen, onion[length].seen) for length in available
-    }
+    overlap = {length: min(surface[length].seen, onion[length].seen) for length in available}
     if length_weighting == "equal_length":
         quotas = _equal_length_quotas(available, target, seed)
     else:
