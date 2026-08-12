@@ -1,6 +1,12 @@
 import numpy as np
 
-from qr_assay.geometry import geometry_features, make_qr, transform_grid, transform_matrix
+from qr_assay.geometry import (
+    data_module_mask,
+    geometry_features,
+    make_qr,
+    transform_grid,
+    transform_matrix,
+)
 
 
 def test_rotation_and_reflection_preserve_density():
@@ -19,11 +25,27 @@ def test_rotation_and_reflection_preserve_density():
 
 
 def test_inversion_is_an_involution_and_complements_density():
-    matrix, _ = make_qr("http://" + "a" * 56 + ".onion/", mask=1)
+    matrix, version = make_qr("http://" + "a" * 56 + ".onion/", mask=1)
+    region = data_module_mask(version)
     inverse = transform_matrix(matrix, inverted=True)
     restored = transform_matrix(inverse, inverted=True)
     assert np.array_equal(restored, matrix)
     assert geometry_features(inverse)["density"] == 1.0 - geometry_features(matrix)["density"]
+    assert geometry_features(inverse, region)["density"] == 1.0 - geometry_features(
+        matrix, region
+    )["density"]
+
+
+def test_data_module_mask_excludes_fixed_qr_function_patterns():
+    matrix, version = make_qr("https://example.invalid/data-region", mask=4)
+    region = data_module_mask(version)
+    assert region.shape == matrix.shape
+    assert 0 < int(region.sum()) < region.size
+    # Finder pattern corners are reserved, while there must be data/ECC positions.
+    assert region[0, 0] == 0
+    assert region[-1, 0] == 0
+    assert region[0, -1] == 0
+    assert np.any(region == 1)
 
 
 def test_scale_is_nearest_neighbor():
