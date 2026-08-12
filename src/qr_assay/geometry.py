@@ -20,6 +20,17 @@ ERROR_CORRECTION = {
     "H": ERROR_CORRECT_H,
 }
 
+D4_OPS = (
+    ("r0", 0, "none"),
+    ("r90", 90, "none"),
+    ("r180", 180, "none"),
+    ("r270", 270, "none"),
+    ("mh", 0, "horizontal"),
+    ("mv", 0, "vertical"),
+    ("md", 0, "diagonal"),
+    ("ma", 0, "anti_diagonal"),
+)
+
 
 def make_qr(
     payload: str, *, error_correction: str = "M", mask: int = 0, border: int = 0
@@ -31,7 +42,6 @@ def make_qr(
         border=int(border),
         mask_pattern=int(mask),
     )
-    # Bytes + optimize=0 force a common byte-mode encoding across all corpora.
     qr.add_data(payload.encode("utf-8"), optimize=0)
     qr.make(fit=True)
     matrix = np.asarray(qr.get_matrix(), dtype=np.uint8)
@@ -45,7 +55,9 @@ def transform_matrix(
     reflection: str = "none",
     scale: int = 1,
     inverted: bool = False,
+    group_element: str | None = None,
 ) -> np.ndarray:
+    del group_element  # provenance label only; operation is encoded below
     result = np.rot90(matrix, k=(int(rotation) // 90) % 4)
     if reflection == "horizontal":
         result = np.fliplr(result)
@@ -113,8 +125,11 @@ def geometry_features(matrix: np.ndarray) -> dict[str, float | int | str]:
         "cov_xx": cxx,
         "cov_yy": cyy,
         "cov_xy": cxy,
+        "cov_trace": cxx + cyy,
         "principal_angle_deg": angle,
         "anisotropy": anisotropy,
+        # Axial orientation is modulo 180 degrees, so 2*theta is the correct
+        # circular representation for inference.
         "orientation_cos2": anisotropy * math.cos(math.radians(2.0 * angle)),
         "orientation_sin2": anisotropy * math.sin(math.radians(2.0 * angle)),
         "transition_h": transition_h,
@@ -127,13 +142,28 @@ def geometry_features(matrix: np.ndarray) -> dict[str, float | int | str]:
 
 
 def transform_grid(config: dict[str, Any]):
+    inversions = [bool(x) for x in config["transforms"]["inversions"]]
+    scales = [int(x) for x in config["transforms"]["scales"]]
+    if str(config["transforms"].get("group", "factorial")) == "d4":
+        for group_element, rotation, reflection in D4_OPS:
+            for scale in scales:
+                for inverted in inversions:
+                    yield {
+                        "group_element": group_element,
+                        "rotation": rotation,
+                        "reflection": reflection,
+                        "scale": scale,
+                        "inverted": inverted,
+                    }
+        return
     for rotation in config["transforms"]["rotations"]:
         for reflection in config["transforms"]["reflections"]:
-            for scale in config["transforms"]["scales"]:
-                for inverted in config["transforms"]["inversions"]:
+            for scale in scales:
+                for inverted in inversions:
                     yield {
+                        "group_element": None,
                         "rotation": int(rotation),
                         "reflection": str(reflection),
-                        "scale": int(scale),
-                        "inverted": bool(inverted),
+                        "scale": scale,
+                        "inverted": inverted,
                     }
