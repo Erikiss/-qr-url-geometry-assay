@@ -70,12 +70,17 @@ def test_end_to_end(tmp_path: Path):
     assert manifest["analysis_summary"]["quality_control"]["passed"]
     assert (tmp_path / "results" / "report.md").exists()
     assert (tmp_path / "results" / "confirmatory_report.md").exists()
+    assert (tmp_path / "results" / "familywise_analysis.json").exists()
+    assert (tmp_path / "results" / "did_analysis.json").exists()
     assert Path(manifest["report"]).name == "confirmatory_report.md"
     assert Path(manifest["descriptive_report"]).name == "report.md"
+    assert manifest["did_analysis"]["family_size"] == 4
+    assert manifest["familywise_analysis"]["predeclared_family_size"] == 8
     with (tmp_path / "results" / "confirmatory_report.md").open(encoding="utf-8") as handle:
         confirmatory_text = handle.read()
-    assert "Confirmatory natural-vs-null effects" in confirmatory_text
-    assert "Host-clustered" in confirmatory_text or "host-clustered" in confirmatory_text
+    assert "Primary cross-corpus test — difference in differences" in confirmatory_text
+    assert "Within-corpus decomposition — fixed eight-cell family" in confirmatory_text
+    assert "pairing-invariant" in confirmatory_text
     with (tmp_path / "results" / "analysis.json").open(encoding="utf-8") as handle:
         analysis = json.load(handle)
     assert len(analysis["paired_effects"]) > 0
