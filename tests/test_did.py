@@ -1,46 +1,31 @@
 import json
-import math
 from pathlib import Path
 
 import numpy as np
 
-from qr_assay.did import TwoWayAccumulator, analyze_difference_in_differences
+from qr_assay.did import SideAccumulator, analyze_difference_in_differences
 from qr_assay.fileio import open_text
 
 
-def test_unique_two_way_clusters_reduce_to_ordinary_mean_se():
-    accumulator = TwoWayAccumulator()
+def test_unique_clusters_reduce_to_ordinary_mean_se():
+    accumulator = SideAccumulator()
     values = [-1.0, -0.5, 0.5, 1.0]
     for index, value in enumerate(values):
-        accumulator.add(
-            np.full(4, value, dtype=np.float64),
-            cluster_a=f"surface-{index}",
-            cluster_b=f"onion-{index}",
-        )
+        accumulator.add(np.full(4, value, dtype=np.float64), cluster=f"host-{index}")
 
-    expected = np.std(values, ddof=1) / math.sqrt(len(values))
-    rows = accumulator.summarize(level_a="surface_host", level_b="onion_host")
-    assert all(row["cluster_count_a"] == 4 for row in rows)
-    assert all(row["cluster_count_b"] == 4 for row in rows)
-    assert all(row["intersection_cluster_count"] == 4 for row in rows)
-    assert all(np.isclose(row["cgm_standard_error"], expected) for row in rows)
+    expected_var = np.var(values, ddof=1) / len(values)
+    assert all(np.isclose(value, expected_var) for value in accumulator.variance())
+    assert len(accumulator.clusters) == 4
 
 
-def test_repeated_two_way_clusters_do_not_become_claim_eligible():
-    accumulator = TwoWayAccumulator()
+def test_repeated_clusters_remain_few_clusters():
+    accumulator = SideAccumulator()
     for index in range(200):
         value = 1.0 if index % 2 == 0 else -1.0
-        accumulator.add(
-            np.full(4, value, dtype=np.float64),
-            cluster_a=f"surface-{index % 2}",
-            cluster_b=f"onion-{(index // 2) % 2}",
-        )
-
-    rows = accumulator.summarize(level_a="surface_host", level_b="onion_host")
-    assert all(row["n_matches"] == 200 for row in rows)
-    assert all(row["cluster_count_a"] == 2 for row in rows)
-    assert all(row["cluster_count_b"] == 2 for row in rows)
-    assert all(not row["cluster_counts_ge_20"] for row in rows)
+        accumulator.add(np.full(4, value, dtype=np.float64), cluster=f"host-{index % 2}")
+    assert accumulator.n == 200
+    assert len(accumulator.clusters) == 2
+    assert accumulator.effective_clusters() == 2.0
 
 
 def test_difference_in_differences_averages_masks_before_contrast(tmp_path: Path):
@@ -73,11 +58,12 @@ def test_difference_in_differences_averages_masks_before_contrast(tmp_path: Path
                     "reflection": "none",
                     "scale": 1,
                     "inverted": False,
+                    "byte_length": 50,
+                    "qr_version": 4,
+                    "error_correction": "M",
                     "natural_host_sha256": f"{corpus}-host-{match_id}",
                     "natural_source_sha256": f"{corpus}-source-{match_id}",
                 }
-                # Add the same mask nuisance to every class. It must disappear
-                # after within-payload mask averaging and the paired DiD.
                 for metric in metrics:
                     row[metric] = base + 0.25 * mask
                 rows.append(row)
@@ -95,11 +81,12 @@ def test_difference_in_differences_averages_masks_before_contrast(tmp_path: Path
     assert result["complete_matches"] == 2
     assert result["invalid_matches"] == 0
     assert result["family_size"] == 4
-    assert len(result["host_two_way_cgm"]) == 4
-    for row in result["host_two_way_cgm"]:
+    rows = result["host_independent_cluster_difference"]
+    assert len(rows) == 4
+    for row in rows:
         assert np.isclose(row["mean_difference_in_differences"], 2.0)
-        assert row["cluster_count_a"] == 2
-        assert row["cluster_count_b"] == 2
+        assert row["surface_cluster_count"] == 2
+        assert row["onion_cluster_count"] == 2
         assert row["eligible_for_confirmatory_claim"] is False
         assert row["strict_confirmatory_pass"] is False
     assert Path(result["output"]).exists()
