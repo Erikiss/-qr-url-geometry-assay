@@ -26,15 +26,17 @@ qr:
   border: 0
 
 transforms:
+  # Corpus inference uses the primary state only. Deterministic rotation/polarity
+  # identities are checked in configs/equivariance.yml and the smoke tests.
   group: factorial
-  rotations: [0, 90, 180, 270]
-  inversions: [false, true]
+  rotations: [0]
+  inversions: [false]
   reflections: [none]
   scales: [1]
 
 execution:
   workers: 0
-  chunk_size: 128
+  chunk_size: 256
 
 outputs:
   directory: results/standard
