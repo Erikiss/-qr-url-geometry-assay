@@ -37,33 +37,36 @@ def _process_chunk(
     output: list[dict[str, Any]] = []
     ecc = str(config["qr"]["error_correction"]).upper()
     border = int(config["qr"].get("border", 0))
+    masks = [int(mask) for mask in config["qr"]["masks"]]
     transforms = list(transform_grid(config))
     for record in records:
         payload = record.get("payload")
         if payload is None:
             raise ValueError("Generation requires outputs.store_payload_text=true")
-        base, version = make_qr(
-            payload, error_correction=ecc, mask=int(record["mask"]), border=border
-        )
-        base_features = geometry_features(base)
-        for transform in transforms:
-            matrix = transform_matrix(base, **transform)
-            features = geometry_features(matrix)
-            row = {
-                "match_id": record["match_id"],
-                "payload_class": record["payload_class"],
-                "grammar": record["grammar"],
-                "synthetic": record["synthetic"],
-                "payload_sha256": record["payload_sha256"],
-                "byte_length": record["byte_length"],
-                "qr_version": version,
-                "error_correction": ecc,
-                "mask": record["mask"],
-                "base_density": base_features["density"],
-                **transform,
-                **features,
-            }
-            output.append(row)
+        for mask in masks:
+            base, version = make_qr(payload, error_correction=ecc, mask=mask, border=border)
+            base_features = geometry_features(base)
+            for transform in transforms:
+                matrix = transform_matrix(base, **transform)
+                features = geometry_features(matrix)
+                row = {
+                    "match_id": record["match_id"],
+                    "payload_class": record["payload_class"],
+                    "grammar": record["grammar"],
+                    "synthetic": record["synthetic"],
+                    "synthetic_mode": record.get("synthetic_mode"),
+                    "source_sha256": record.get("source_sha256"),
+                    "host_sha256": record.get("host_sha256"),
+                    "payload_sha256": record["payload_sha256"],
+                    "byte_length": record["byte_length"],
+                    "qr_version": version,
+                    "error_correction": ecc,
+                    "mask": mask,
+                    "base_density": base_features["density"],
+                    **transform,
+                    **features,
+                }
+                output.append(row)
     return output
 
 
@@ -87,19 +90,13 @@ def _write_examples(config: dict[str, Any], payload_path: Path, output_dir: Path
     counts: dict[str, int] = {}
     written = 0
     ecc = str(config["qr"]["error_correction"]).upper()
+    example_mask = int(config["qr"]["masks"][0])
     for record in _read_jsonl(payload_path):
         cls = record["payload_class"]
         if counts.get(cls, 0) >= limit:
             continue
-        matrix, _ = make_qr(
-            record["payload"], error_correction=ecc, mask=int(record["mask"]), border=0
-        )
-        path = (
-            output_dir
-            / "examples"
-            / cls
-            / f"match-{record['match_id']:06d}-mask-{record['mask']}.png"
-        )
+        matrix, _ = make_qr(record["payload"], error_correction=ecc, mask=example_mask, border=0)
+        path = output_dir / "examples" / cls / f"match-{record['match_id']:06d}-mask-{example_mask}.png"
         _save_png(matrix, path)
         counts[cls] = counts.get(cls, 0) + 1
         written += 1
@@ -143,6 +140,7 @@ def generate_features(config: dict[str, Any]) -> dict[str, Any]:
         "rows": rows,
         "chunks": chunks,
         "workers": workers,
+        "masks_per_payload": len(config["qr"]["masks"]),
         "elapsed_seconds": elapsed,
         "rows_per_second": rows / elapsed if elapsed else 0.0,
         "png_examples": examples,
