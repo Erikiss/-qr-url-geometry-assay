@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import random
 import sqlite3
 import urllib.parse
@@ -231,32 +232,129 @@ def _collect(config: dict[str, Any], kind: str) -> tuple[dict[int, Reservoir], d
     return buckets, stats
 
 
-def _round_robin_matches(
-    surface: dict[int, Reservoir], onion: dict[int, Reservoir], target: int, seed: int
-) -> list[tuple[int, SourcePayload, SourcePayload]]:
+def _equal_length_quotas(
+    available: dict[int, int], target: int, seed: int
+) -> dict[int, int]:
+    """Legacy sensitivity: approximately equal representation of byte lengths."""
     rng = random.Random(seed)
-    common = sorted(set(surface) & set(onion))
-    rng.shuffle(common)
-    for length in common:
-        rng.shuffle(surface[length].items)
-        rng.shuffle(onion[length].items)
-    positions = {length: 0 for length in common}
-    result: list[tuple[int, SourcePayload, SourcePayload]] = []
-    while len(result) < target:
+    lengths = list(available)
+    rng.shuffle(lengths)
+    quotas = {length: 0 for length in lengths}
+    remaining = min(target, sum(available.values()))
+    while remaining:
         progressed = False
-        for length in common:
-            position = positions[length]
-            available = min(len(surface[length].items), len(onion[length].items))
-            if position >= available:
+        for length in lengths:
+            if quotas[length] >= available[length]:
                 continue
-            result.append((length, surface[length].items[position], onion[length].items[position]))
-            positions[length] += 1
+            quotas[length] += 1
+            remaining -= 1
             progressed = True
-            if len(result) >= target:
+            if remaining == 0:
                 break
         if not progressed:
             break
-    return result
+    return quotas
+
+
+def _overlap_weighted_quotas(
+    surface: dict[int, Reservoir],
+    onion: dict[int, Reservoir],
+    available: dict[int, int],
+    target: int,
+    seed: int,
+) -> dict[int, int]:
+    """Allocate matches proportional to min(empirical counts) per byte length.
+
+    Reservoir `seen` counts represent the post-filter, post-dedup empirical
+    support before per-length reservoir truncation. Allocation is capped by the
+    actual retained reservoir capacity; any clipped mass is redistributed over
+    lengths with remaining capacity.
+    """
+    rng = random.Random(seed)
+    weights = {
+        length: min(surface[length].seen, onion[length].seen)
+        for length in available
+        if available[length] > 0
+    }
+    quotas = {length: 0 for length in available}
+    remaining = min(target, sum(available.values()))
+    active = {length for length, capacity in available.items() if capacity > 0}
+
+    while remaining > 0 and active:
+        total_weight = sum(weights[length] for length in active)
+        if total_weight <= 0:
+            break
+        raw = {length: remaining * weights[length] / total_weight for length in active}
+        allocated = 0
+        for length in sorted(active):
+            room = available[length] - quotas[length]
+            take = min(room, math.floor(raw[length]))
+            if take > 0:
+                quotas[length] += take
+                remaining -= take
+                allocated += take
+        active = {length for length in active if quotas[length] < available[length]}
+        if remaining == 0 or not active:
+            break
+        if allocated == 0:
+            # Hamilton-style largest-remainder allocation. Seeded jitter only
+            # breaks exact fractional ties, preserving deterministic runs.
+            candidates = sorted(
+                active,
+                key=lambda length: (raw.get(length, 0.0) % 1.0, rng.random()),
+                reverse=True,
+            )
+            for length in candidates:
+                if remaining == 0:
+                    break
+                quotas[length] += 1
+                remaining -= 1
+            active = {length for length in active if quotas[length] < available[length]}
+
+    return quotas
+
+
+def _match_payloads(
+    surface: dict[int, Reservoir],
+    onion: dict[int, Reservoir],
+    target: int,
+    seed: int,
+    length_weighting: str,
+) -> tuple[list[tuple[int, SourcePayload, SourcePayload]], dict[str, Any]]:
+    rng = random.Random(seed)
+    common = sorted(set(surface) & set(onion))
+    available = {
+        length: min(len(surface[length].items), len(onion[length].items)) for length in common
+    }
+    available = {length: count for length, count in available.items() if count > 0}
+    overlap = {
+        length: min(surface[length].seen, onion[length].seen) for length in available
+    }
+    if length_weighting == "equal_length":
+        quotas = _equal_length_quotas(available, target, seed)
+    else:
+        quotas = _overlap_weighted_quotas(surface, onion, available, target, seed)
+
+    result: list[tuple[int, SourcePayload, SourcePayload]] = []
+    for length in sorted(quotas):
+        count = quotas[length]
+        if count <= 0:
+            continue
+        rng.shuffle(surface[length].items)
+        rng.shuffle(onion[length].items)
+        for index in range(count):
+            result.append((length, surface[length].items[index], onion[length].items[index]))
+    rng.shuffle(result)
+    return result, {
+        "length_weighting": length_weighting,
+        "empirical_overlap_total": sum(overlap.values()),
+        "reservoir_pair_capacity": sum(available.values()),
+        "overlap_by_length": {str(length): overlap[length] for length in sorted(overlap)},
+        "available_by_length": {str(length): available[length] for length in sorted(available)},
+        "selected_by_length": {
+            str(length): quotas[length] for length in sorted(quotas) if quotas[length] > 0
+        },
+    }
 
 
 def prepare_payloads(config: dict[str, Any]) -> dict[str, Any]:
@@ -266,7 +364,10 @@ def prepare_payloads(config: dict[str, Any]) -> dict[str, Any]:
     surface, surface_stats = _collect(config, "surface")
     onion, onion_stats = _collect(config, "onion")
     target = int(config["sampling"]["target_pairs"])
-    matches = _round_robin_matches(surface, onion, target, int(config["seed"]))
+    length_weighting = str(config["sampling"].get("length_weighting", "overlap"))
+    matches, matching_stats = _match_payloads(
+        surface, onion, target, int(config["seed"]), length_weighting
+    )
     if not matches:
         surface_lengths = sorted(surface)
         onion_lengths = sorted(onion)
@@ -362,6 +463,7 @@ def prepare_payloads(config: dict[str, Any]) -> dict[str, Any]:
         "complete": len(matches) == target,
         "class_counts": dict(class_counts),
         "synthetic_mode": synthetic_mode,
+        "matching": matching_stats,
         "surface": surface_stats,
         "onion": onion_stats,
         "common_byte_lengths": sorted(set(surface) & set(onion)),
