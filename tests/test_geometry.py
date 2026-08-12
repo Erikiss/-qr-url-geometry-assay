@@ -62,7 +62,9 @@ def test_data_module_mask_excludes_fixed_qr_function_patterns():
 
 def test_codeword_regions_are_disjoint_and_exactly_partition_free_modules():
     for ecc in ("L", "M", "Q", "H"):
-        matrix, version = make_qr("https://example.invalid/codeword-partition", mask=3, error_correction=ecc)
+        matrix, version = make_qr(
+            "https://example.invalid/codeword-partition", mask=3, error_correction=ecc
+        )
         free = data_module_mask(version).astype(bool)
         data_region, ecc_region, remainder_region = codeword_region_masks(version, ecc)
         data_region = data_region.astype(bool)
