@@ -19,6 +19,7 @@ from .generate import _process_chunk, generate_features
 from .runner import run_all
 from .sampling import prepare_payloads
 from .sources import acquire_manifest
+from .synthetic import synthetic_onion_label
 
 
 def _common_config(parser: argparse.ArgumentParser) -> None:
@@ -42,12 +43,11 @@ def _demo_payloads(output_dir: Path, pairs: int, seed: int) -> dict[str, Any]:
     surface_path = output_dir / "surface.txt"
     onion_path = output_dir / "onion.txt"
     rng = random.Random(seed)
-    base32 = "abcdefghijklmnopqrstuvwxyz234567"
     surface_rows: list[str] = []
     onion_rows: list[str] = []
     for index in range(pairs):
         path = f"/p/{index:06d}" if index % 3 else "/"
-        onion_host = "".join(rng.choice(base32) for _ in range(56)) + ".onion"
+        onion_host = synthetic_onion_label(56, rng) + ".onion"
         onion = f"http://{onion_host}{path}"
         onion_stripped_bytes = len((onion_host + path).encode("utf-8"))
         fixed = len((".invalid" + path).encode("utf-8"))
@@ -71,10 +71,9 @@ def _demo_payloads(output_dir: Path, pairs: int, seed: int) -> dict[str, Any]:
 
 def _benchmark(count: int, workers: int) -> dict[str, Any]:
     rng = random.Random(267010)
-    base32 = "abcdefghijklmnopqrstuvwxyz234567"
     records = []
     for index in range(count):
-        payload = "".join(rng.choice(base32) for _ in range(56)) + ".onion/"
+        payload = synthetic_onion_label(56, rng) + ".onion/"
         records.append(
             {
                 "match_id": index,
