@@ -3,20 +3,23 @@ seed: 267010
 sources:
   surface:
     paths: [data/raw/surface]
-    scan_limit: 10000000
+    scan_limit: 1000000
     deduplicate: false
-    granularity: url
+    granularity: origin
   onion:
     paths: [data/raw/onion]
     scan_limit: null
     deduplicate: true
-    granularity: url
+    granularity: origin
+    versions: [3]
 
 sampling:
-  target_pairs: 100000
-  reservoir_per_length: 10000
+  # D4/polarity rows are deterministic equivariance calibration, so they do not
+  # need the corpus-scale sample used for confirmatory lexical inference.
+  target_pairs: 10000
+  reservoir_per_length: 20000
   min_bytes: 16
-  max_bytes: 512
+  max_bytes: 1024
   scheme_policy: strip
   synthetic_mode: grammar_random
 
@@ -26,12 +29,14 @@ qr:
   border: 0
 
 transforms:
-  # Exactly the 8 unique elements of the square symmetry group D4.
+  # Exactly the 8 unique elements of the square symmetry group D4. Bit inversion
+  # is crossed as a separate involution. Pixel scaling is deferred to the neural
+  # image/model assay; nearest-neighbour matrix duplication is tautological here.
   group: d4
   rotations: [0]
   reflections: [none]
   inversions: [false, true]
-  scales: [1, 2]
+  scales: [1]
 
 execution:
   workers: 0
