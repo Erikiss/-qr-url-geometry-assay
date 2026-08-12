@@ -17,6 +17,8 @@ from .cluster import analyze_clustered_core
 from .codeword import analyze_codeword_regions
 from .config import config_sha256
 from .confirmatory_report import write_confirmatory_report
+from .did import analyze_difference_in_differences
+from .familywise import analyze_familywise_core
 from .generate import generate_features
 from .null_qc import analyze_null_qc
 from .sampling import prepare_payloads
@@ -54,6 +56,8 @@ def run_all(config: dict[str, Any]) -> dict[str, Any]:
     generation = generate_features(config)
     analysis = analyze_features(config)
     clustered = analyze_clustered_core(config)
+    familywise = analyze_familywise_core(config, clustered)
+    did = analyze_difference_in_differences(config)
     codeword = (
         analyze_codeword_regions(config)
         if bool(config.get("analysis", {}).get("codeword_diagnostics", False))
@@ -75,6 +79,8 @@ def run_all(config: dict[str, Any]) -> dict[str, Any]:
         preparation,
         null_qc,
         clustered,
+        familywise,
+        did,
         descriptive_report=descriptive_report_path,
         codeword=codeword,
         bitstream=bitstream,
@@ -115,6 +121,18 @@ def run_all(config: dict[str, Any]) -> dict[str, Any]:
             "complete_matches_seen": clustered["complete_matches_seen"],
             "invalid_matches": clustered["invalid_matches"],
             "method": clustered["method"],
+        },
+        "familywise_analysis": {
+            "output": familywise["output"],
+            "alpha": familywise["alpha"],
+            "predeclared_family_size": familywise["predeclared_family_size"],
+        },
+        "did_analysis": {
+            "output": did["output"],
+            "complete_matches": did["complete_matches"],
+            "invalid_matches": did["invalid_matches"],
+            "family_size": did["family_size"],
+            "method": did["method"],
         },
         "codeword_analysis": (
             {
