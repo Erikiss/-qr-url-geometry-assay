@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import json
-from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from .cluster import CORE_METRICS, CONFIRMATORY_CONTRASTS, ClusterAccumulator
+from .cluster import CONFIRMATORY_CONTRASTS, CORE_METRICS, ClusterAccumulator
 from .fileio import open_text
 from .geometry import codeword_region_masks, geometry_features, make_qr, unmask_data_modules
 
