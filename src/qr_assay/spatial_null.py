@@ -164,8 +164,7 @@ def analyze_spatial_null(config: dict[str, Any]) -> dict[str, Any]:
                 continue
             for region_name in REGIONS:
                 accumulators[region_name][contrast].add(
-                    residuals[natural_class][region_name]
-                    - residuals[synthetic_class][region_name],
+                    residuals[natural_class][region_name] - residuals[synthetic_class][region_name],
                     host=str(natural_host),
                     source=str(natural_source),
                 )
