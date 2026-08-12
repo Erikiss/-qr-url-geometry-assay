@@ -107,10 +107,13 @@ def analyze_codeword_regions(config: dict[str, Any]) -> dict[str, Any]:
         for contrast, (natural_class, synthetic_class) in CONFIRMATORY_CONTRASTS.items():
             natural = records[natural_class]
             synthetic = records[synthetic_class]
+            natural_host = natural.get("natural_host_sha256")
+            natural_source = natural.get("natural_source_sha256")
             if (
-                natural.get("natural_host_sha256") != synthetic.get("natural_host_sha256")
-                or natural.get("natural_source_sha256")
-                != synthetic.get("natural_source_sha256")
+                not natural_host
+                or not natural_source
+                or natural_host != synthetic.get("natural_host_sha256")
+                or natural_source != synthetic.get("natural_source_sha256")
             ):
                 invalid_matches += 1
                 continue
@@ -121,8 +124,8 @@ def analyze_codeword_regions(config: dict[str, Any]) -> dict[str, Any]:
                 )
                 accumulators[region_name][contrast].add(
                     values,
-                    host=str(natural.get("natural_host_sha256")),
-                    source=str(natural.get("natural_source_sha256")),
+                    host=str(natural_host),
+                    source=str(natural_source),
                 )
         records = {}
 
