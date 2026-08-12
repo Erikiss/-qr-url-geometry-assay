@@ -5,6 +5,7 @@ sources:
     paths: [data/raw/demo/surface.txt]
     scan_limit: 1000
     deduplicate: true
+    granularity: url
   onion:
     paths: [data/raw/demo/onion.txt]
     scan_limit: 1000
@@ -16,6 +17,8 @@ sampling:
   reservoir_per_length: 500
   min_bytes: 16
   max_bytes: 256
+  scheme_policy: strip
+  synthetic_mode: grammar_random
 
 qr:
   error_correction: M
@@ -23,6 +26,7 @@ qr:
   border: 0
 
 transforms:
+  group: factorial
   rotations: [0, 90, 180, 270]
   inversions: [false, true]
   reflections: [none]
