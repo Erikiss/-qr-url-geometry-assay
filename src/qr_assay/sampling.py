@@ -143,9 +143,7 @@ def _collect(config: dict[str, Any], kind: str) -> tuple[dict[int, Reservoir], d
                 continue
             accepted += 1
             if length not in buckets:
-                buckets[length] = Reservoir(
-                    capacity, random.Random(seed ^ (length * 0x9E3779B1))
-                )
+                buckets[length] = Reservoir(capacity, random.Random(seed ^ (length * 0x9E3779B1)))
             buckets[length].add((source, payload))
     finally:
         if seen_db is not None:
