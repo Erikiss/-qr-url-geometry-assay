@@ -57,14 +57,23 @@ Bit inversion is the exact involution `Q' = 1 - Q`; it is not geometric circle i
 
 ## What is measured
 
-The stage-1 feature families are:
+Every QR is measured in **two regions**:
 
-- **radial/stretching-like:** radial mean, radial standard deviation, covariance trace;
-- **translation-like:** normalized black-module centroid and centroid radius;
-- **axial orientation:** anisotropy plus `cos(2θ)` / `sin(2θ)`;
-- **texture/symmetry controls:** horizontal/vertical transition rates and reflection/180° similarity.
+- **full matrix** — includes finder, timing, alignment, format/version and data/ECC modules;
+- **data/ECC region only** — masks out the fixed QR function patterns.
 
-`principal_angle_deg` is descriptive only because principal-axis direction is axial modulo 180°. Inferential comparisons use the doubled-angle embedding.
+The **data/ECC region is primary**. Whole-matrix geometry is retained as a sensitivity/control analysis, because fixed finder and timing patterns can dominate simple moments without being payload-specific. The data/ECC mask is reconstructed from the same `qrcode` encoder's pre-data-map function-pattern setup and checked in CI.
+
+The primary stage-1 feature families are therefore:
+
+- **radial/stretching-like:** `data_radial_mean`, `data_radial_std`, `data_cov_trace`;
+- **translation-like:** normalized data/ECC centroid and `data_centroid_radius`;
+- **axial orientation:** `data_anisotropy` plus `data_orientation_cos2` / `data_orientation_sin2`;
+- **texture controls:** `data_transition_h` / `data_transition_v`.
+
+Raw `principal_angle_deg` values are descriptive only because principal-axis direction is axial modulo 180°. Inferential comparisons use the doubled-angle embedding.
+
+This version separates fixed QR function patterns from the data/ECC region, but **does not yet split payload codewords from Reed–Solomon ECC codewords**. That becomes a next refinement only if an effect survives the current controls.
 
 The 0°→90°→180°→270° orbit is **equivariance calibration**. Because the code explicitly rotates the matrix, cyclicity there is true by construction and is not evidence for cyclic dynamics in a transformer.
 
@@ -111,6 +120,7 @@ surface granularity = origin
 onion granularity   = origin
 scheme policy       = strip
 masks               = all 8
+primary region      = data/ECC modules only
 ```
 
 `configs/standard.yml` retains paths/queries in both corpora and is more vulnerable to host/crawl dependence. Publication inference for URL-granularity data should use host/crawl-clustered resampling; the built-in normal-approximation p-values are secondary diagnostics only.
@@ -136,7 +146,7 @@ qr-assay benchmark --count 10000 --workers 0
 Each run directory contains:
 
 - `payloads.jsonl.gz` — matched payload metadata/provenance;
-- `features.jsonl.gz` — one row per QR mask × transform;
+- `features.jsonl.gz` — one row per QR mask × transform with full-matrix and data/ECC-region features;
 - `analysis.json` — unbalanced and density-balanced summaries;
 - `report.md` — concise human-readable result;
 - `run_manifest.json` — full config, environment, hashes, timings and QC;
@@ -153,14 +163,15 @@ Raw corpora and generated results are gitignored. Publish source manifests, chec
 - explicit scheme policy;
 - forced QR byte mode;
 - every payload under every configured mask;
+- fixed QR function patterns separated from data/ECC-region geometry;
 - feature-file SHA-256;
-- density/inversion/matched-mask QC gates;
+- whole-matrix and data/ECC inversion/matched-mask QC gates;
 - paired effects computed once per `match_id` after mask averaging;
 - axial orientation represented with `cos(2θ)` and `sin(2θ)`;
 - effect sizes and intervals are primary; p-values are secondary.
 
 ## Before a million-scale run
 
-Run small planted worlds first. The assay should stay null when both corpora come from the same process and recover deliberately planted unigram, ordering, mask and orientation differences. The required falsification battery is specified in `docs/protocol.md`.
+Run small planted worlds first. The assay should stay null when both corpora come from the same process and recover deliberately planted unigram, ordering, mask and orientation differences. It should also ignore changes confined to fixed QR function modules when the primary data/ECC metrics are used. The required falsification battery is specified in `docs/protocol.md`.
 
 Only after stage 1 survives those checks should a stage-2 model assay attach continuous head/expert carrier vectors and test actual neural translation, stretching, rotation, hysteresis or cyclicity.
