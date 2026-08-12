@@ -5,7 +5,7 @@ import json
 import random
 import sqlite3
 import urllib.parse
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,16 +15,24 @@ from .sources import iter_urls, source_inventory, stable_digest128
 from .synthetic import grammar_matched
 
 
+@dataclass(frozen=True)
+class SourcePayload:
+    source: str
+    payload: str
+    natural_host_sha256: str
+    onion_version: int | None
+
+
 @dataclass
 class Reservoir:
     capacity: int
     rng: random.Random
 
     def __post_init__(self) -> None:
-        self.items: list[tuple[str, str]] = []
+        self.items: list[SourcePayload] = []
         self.seen = 0
 
-    def add(self, item: tuple[str, str]) -> None:
+    def add(self, item: SourcePayload) -> None:
         self.seen += 1
         if len(self.items) < self.capacity:
             self.items.append(item)
@@ -34,23 +42,49 @@ class Reservoir:
             self.items[position] = item
 
 
-def _canonicalize_payload(payload: str, *, granularity: str, scheme_policy: str) -> str | None:
-    """Create the actual QR payload after source parsing.
-
-    `granularity` is applied symmetrically to surface and onion sources.
-    `scheme_policy=strip` removes the otherwise arbitrary http/https difference
-    before byte-length matching; `https` forces a common scheme; `preserve`
-    retains the observed scheme.
-    """
+def _parse_url(payload: str) -> urllib.parse.SplitResult | None:
     try:
         parsed = urllib.parse.urlsplit(payload)
     except ValueError:
         return None
-    if not parsed.hostname:
+    return parsed if parsed.hostname else None
+
+
+def _natural_host_sha256(payload: str) -> str:
+    parsed = _parse_url(payload)
+    host = (parsed.hostname or "").lower() if parsed else ""
+    return hashlib.sha256(host.encode("utf-8")).hexdigest()
+
+
+def _onion_version(payload: str) -> int | None:
+    parsed = _parse_url(payload)
+    host = (parsed.hostname or "").lower() if parsed else ""
+    if not host.endswith(".onion"):
+        return None
+    label = host.rsplit(".onion", 1)[0].split(".")[-1]
+    if len(label) == 56:
+        return 3
+    if len(label) == 16:
+        return 2
+    return None
+
+
+def _canonicalize_payload(payload: str, *, granularity: str, scheme_policy: str) -> str | None:
+    """Create the actual QR payload after source parsing.
+
+    `origin` keeps only the host, `url` keeps host + path/query, and
+    `path_query` removes the host entirely so surface/onion suffix structure can
+    be compared without the trivial human-domain-vs-cryptographic-host contrast.
+    """
+    parsed = _parse_url(payload)
+    if parsed is None:
         return None
     netloc = parsed.netloc.lower()
     path = parsed.path or "/"
     query = parsed.query
+
+    if granularity == "path_query":
+        return path + (f"?{query}" if query else "")
     if granularity == "origin":
         path = "/"
         query = ""
@@ -58,12 +92,6 @@ def _canonicalize_payload(payload: str, *, granularity: str, scheme_policy: str)
         return netloc + path + (f"?{query}" if query else "")
     scheme = parsed.scheme.lower() if scheme_policy == "preserve" else "https"
     return urllib.parse.urlunsplit((scheme, netloc, path, query, ""))
-
-
-def _host_hash(payload: str) -> str:
-    candidate = payload if "://" in payload else f"https://{payload}"
-    host = urllib.parse.urlsplit(candidate).hostname or ""
-    return hashlib.sha256(host.lower().encode("utf-8")).hexdigest()
 
 
 def _open_seen_db(path: Path) -> sqlite3.Connection:
@@ -75,6 +103,15 @@ def _open_seen_db(path: Path) -> sqlite3.Connection:
     db.execute("PRAGMA temp_store=MEMORY")
     db.execute("CREATE TABLE seen (digest BLOB PRIMARY KEY) WITHOUT ROWID")
     return db
+
+
+def _dedup_key(payload: str, host_sha256: str, granularity: str) -> str:
+    # In the host-neutral grammar arm, the same suffix on two independent hosts
+    # is two observations in different clusters. Collapse only duplicates within
+    # the same natural host. Other granularities deduplicate the effective payload.
+    if granularity == "path_query":
+        return f"{host_sha256}:{payload}"
+    return payload
 
 
 def _collect(config: dict[str, Any], kind: str) -> tuple[dict[int, Reservoir], dict[str, Any]]:
@@ -89,17 +126,23 @@ def _collect(config: dict[str, Any], kind: str) -> tuple[dict[int, Reservoir], d
     max_bytes = int(config["sampling"]["max_bytes"])
     granularity = str(source_config.get("granularity", "url"))
     scheme_policy = str(config["sampling"].get("scheme_policy", "strip"))
+    allowed_onion_versions = {
+        int(value) for value in config["sources"].get("onion", {}).get("versions", [3])
+    }
     buckets: dict[int, Reservoir] = {}
     total = 0
     accepted = 0
+    onion_version_counts: Counter[int] = Counter()
+    rejected_onion_versions: Counter[int] = Counter()
 
-    # Deduplicate the *effective QR payload* after granularity and scheme policy,
-    # not the raw crawl URL. This avoids two giant seen-sets and correctly
-    # collapses http/https or multiple paths when the protocol asks for it.
-    must_dedup = granularity == "origin" or bool(source_config.get("deduplicate", True))
-    dedup_backend = str(
-        source_config.get("dedup_backend", "memory" if granularity == "origin" else "sqlite")
+    # Deduplicate after canonicalization. path_query deliberately includes the
+    # natural host in the dedup key so repeated `/login` paths on different hosts
+    # survive as separate (clustered) observations.
+    must_dedup = granularity in {"origin", "path_query"} or bool(
+        source_config.get("deduplicate", True)
     )
+    default_backend = "memory" if granularity == "origin" else "sqlite"
+    dedup_backend = str(source_config.get("dedup_backend", default_backend))
     if dedup_backend not in {"memory", "sqlite"}:
         raise ValueError(f"sources.{kind}.dedup_backend must be memory or sqlite")
     seen_memory: set[bytes] | None = set() if must_dedup and dedup_backend == "memory" else None
@@ -117,13 +160,22 @@ def _collect(config: dict[str, Any], kind: str) -> tuple[dict[int, Reservoir], d
             deduplicate=False,
         ):
             total += 1
+            version = _onion_version(raw_payload) if kind == "onion" else None
+            if kind == "onion":
+                if version not in allowed_onion_versions:
+                    if version is not None:
+                        rejected_onion_versions[version] += 1
+                    continue
+                onion_version_counts[int(version)] += 1
+
+            host_sha256 = _natural_host_sha256(raw_payload)
             payload = _canonicalize_payload(
                 raw_payload, granularity=granularity, scheme_policy=scheme_policy
             )
             if not payload:
                 continue
             if must_dedup:
-                digest = stable_digest128(payload)
+                digest = stable_digest128(_dedup_key(payload, host_sha256, granularity))
                 if seen_memory is not None:
                     if digest in seen_memory:
                         continue
@@ -144,27 +196,44 @@ def _collect(config: dict[str, Any], kind: str) -> tuple[dict[int, Reservoir], d
             accepted += 1
             if length not in buckets:
                 buckets[length] = Reservoir(capacity, random.Random(seed ^ (length * 0x9E3779B1)))
-            buckets[length].add((source, payload))
+            buckets[length].add(
+                SourcePayload(
+                    source=source,
+                    payload=payload,
+                    natural_host_sha256=host_sha256,
+                    onion_version=version,
+                )
+            )
     finally:
         if seen_db is not None:
             seen_db.commit()
             seen_db.close()
 
-    return buckets, {
+    stats: dict[str, Any] = {
         "read": total,
         "accepted": accepted,
         "length_buckets": len(buckets),
         "granularity": granularity,
         "scheme_policy": scheme_policy,
         "deduplicated_effective_payloads": must_dedup,
+        "dedup_unit": "natural_host+payload" if granularity == "path_query" else "payload",
         "dedup_backend": dedup_backend if must_dedup else "none",
         "files": inventory,
     }
+    if kind == "onion":
+        stats.update(
+            {
+                "allowed_versions": sorted(allowed_onion_versions),
+                "accepted_by_version_before_length_filter": dict(sorted(onion_version_counts.items())),
+                "rejected_by_version": dict(sorted(rejected_onion_versions.items())),
+            }
+        )
+    return buckets, stats
 
 
 def _round_robin_matches(
     surface: dict[int, Reservoir], onion: dict[int, Reservoir], target: int, seed: int
-) -> list[tuple[int, tuple[str, str], tuple[str, str]]]:
+) -> list[tuple[int, SourcePayload, SourcePayload]]:
     rng = random.Random(seed)
     common = sorted(set(surface) & set(onion))
     rng.shuffle(common)
@@ -172,7 +241,7 @@ def _round_robin_matches(
         rng.shuffle(surface[length].items)
         rng.shuffle(onion[length].items)
     positions = {length: 0 for length in common}
-    result: list[tuple[int, tuple[str, str], tuple[str, str]]] = []
+    result: list[tuple[int, SourcePayload, SourcePayload]] = []
     while len(result) < target:
         progressed = False
         for length in common:
@@ -210,16 +279,31 @@ def prepare_payloads(config: dict[str, Any]) -> dict[str, Any]:
     class_counts: dict[str, int] = defaultdict(int)
     with open_text(payload_path, "wt") as handle:
         for match_id, (byte_length, surface_item, onion_item) in enumerate(matches):
-            surface_source, surface_payload = surface_item
-            onion_source, onion_payload = onion_item
+            surface_payload = surface_item.payload
+            onion_payload = onion_item.payload
             rows = [
-                ("surface_natural", "surface", False, surface_source, surface_payload),
-                ("onion_natural", "onion", False, onion_source, onion_payload),
+                (
+                    "surface_natural",
+                    "surface",
+                    False,
+                    surface_item.source,
+                    surface_item,
+                    surface_payload,
+                ),
+                (
+                    "onion_natural",
+                    "onion",
+                    False,
+                    onion_item.source,
+                    onion_item,
+                    onion_payload,
+                ),
                 (
                     "surface_synthetic",
                     "surface",
                     True,
                     f"generated:surface_natural:{synthetic_mode}",
+                    surface_item,
                     grammar_matched(
                         surface_payload,
                         seed=int(config["seed"]),
@@ -233,6 +317,7 @@ def prepare_payloads(config: dict[str, Any]) -> dict[str, Any]:
                     "onion",
                     True,
                     f"generated:onion_natural:{synthetic_mode}",
+                    onion_item,
                     grammar_matched(
                         onion_payload,
                         seed=int(config["seed"]),
@@ -242,7 +327,10 @@ def prepare_payloads(config: dict[str, Any]) -> dict[str, Any]:
                     ),
                 ),
             ]
-            for payload_class, grammar, synthetic, source, payload in rows:
+            for payload_class, grammar, synthetic, source, natural_item, payload in rows:
+                natural_source_sha256 = hashlib.sha256(
+                    natural_item.source.encode("utf-8")
+                ).hexdigest()
                 record = {
                     "match_id": match_id,
                     "payload_class": payload_class,
@@ -251,7 +339,15 @@ def prepare_payloads(config: dict[str, Any]) -> dict[str, Any]:
                     "synthetic_mode": synthetic_mode if synthetic else None,
                     "source": source,
                     "source_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
-                    "host_sha256": _host_hash(payload),
+                    # Cluster IDs always point to the observed parent, including
+                    # synthetic controls. They remain available in path_query mode
+                    # even though the QR payload itself contains no hostname.
+                    "natural_source_sha256": natural_source_sha256,
+                    "natural_host_sha256": natural_item.natural_host_sha256,
+                    # Backward-compatible alias; semantically this is now the
+                    # natural-parent host cluster, not necessarily a payload host.
+                    "host_sha256": natural_item.natural_host_sha256,
+                    "onion_version": natural_item.onion_version,
                     "payload": payload if store_text else None,
                     "payload_sha256": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
                     "byte_length": len(payload.encode("utf-8")),
