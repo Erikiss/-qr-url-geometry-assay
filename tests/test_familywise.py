@@ -81,9 +81,7 @@ def test_low_cluster_count_never_becomes_confirmatory_claim(tmp_path: Path):
 
 
 def test_low_effective_cluster_count_blocks_claim_despite_many_raw_clusters(tmp_path: Path):
-    rows = [
-        _row(metric, 20.0, 1.0, clusters=30, effective_clusters=6.5) for metric in _metrics()
-    ]
+    rows = [_row(metric, 20.0, 1.0, clusters=30, effective_clusters=6.5) for metric in _metrics()]
     contrasts = {
         "surface": {"host_clustered": rows, "source_clustered": [dict(row) for row in rows]},
         "onion": {
