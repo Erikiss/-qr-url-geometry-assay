@@ -22,10 +22,10 @@ def test_onion_extractor_deduplicates_at_stream_layer_not_parser():
     assert normalize_onion(host) == [f"http://{host}/"]
 
 
-def test_origin_granularity_deduplicates_paths(tmp_path):
+def test_origin_granularity_deduplicates_paths_and_strips_scheme(tmp_path):
     host = "c" * 56 + ".onion"
     source = tmp_path / "onions.txt"
-    source.write_text(f"http://{host}/a\nhttp://{host}/b\n", encoding="utf-8")
+    source.write_text(f"http://{host}/a\nhttps://{host}/b\n", encoding="utf-8")
     config = {
         "seed": 1,
         "sources": {
@@ -36,9 +36,14 @@ def test_origin_granularity_deduplicates_paths(tmp_path):
                 "granularity": "origin",
             }
         },
-        "sampling": {"reservoir_per_length": 10, "min_bytes": 1, "max_bytes": 200},
+        "sampling": {
+            "reservoir_per_length": 10,
+            "min_bytes": 1,
+            "max_bytes": 200,
+            "scheme_policy": "strip",
+        },
     }
     buckets, stats = _collect(config, "onion")
     assert stats["accepted"] == 1
     assert sum(len(bucket.items) for bucket in buckets.values()) == 1
-    assert next(iter(buckets.values())).items[0][1] == f"http://{host}/"
+    assert next(iter(buckets.values())).items[0][1] == f"{host}/"
